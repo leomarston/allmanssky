@@ -1,75 +1,233 @@
-// AllMansSky entry point.
-// SCAFFOLD BUILD: renders an engine validation scene (star + planet + bloom).
-// Replaced by the full state machine (menu / space / surface) at integration.
+// AllMansSky entry point: bootstraps the engine, universe, UI, and runs the
+// state machine (menu → space ⇄ surface).
 import * as THREE from 'three';
 import { Engine } from './core/engine.js';
 import { input } from './core/input.js';
-import { RNG } from './core/rng.js';
-import { SimplexNoise } from './core/noise.js';
+import { events } from './core/events.js';
+import { hashString } from './core/rng.js';
+import { Galaxy, GALAXY_SEED_DEFAULT } from './universe/galaxy.js';
+import { GameState } from './gameplay/state.js';
+import { QuestSystem } from './gameplay/quests.js';
+import { SpaceState } from './states/spacestate.js';
+import { SurfaceState } from './states/surfacestate.js';
+import { HUD } from './ui/hud.js';
+import { Screens } from './ui/screens.js';
+import * as notifications from './ui/notifications.js';
+import { InventoryUI } from './ui/inventoryui.js';
+import { TradeUI } from './ui/tradeui.js';
+import { GalaxyMap } from './ui/mapui.js';
+import { QuestUI } from './ui/questui.js';
+import { BuildUI } from './ui/buildui.js';
+import { audio } from './audio/audio.js';
 
-const canvas = document.getElementById('game-canvas');
-const engine = new Engine(canvas);
-input.attach(canvas);
+class Game {
+  constructor() {
+    this.canvas = document.getElementById('game-canvas');
+    this.uiRoot = document.getElementById('ui-root');
+    this.engine = new Engine(this.canvas);
+    input.attach(this.canvas);
 
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 1e8);
-camera.position.set(0, 6, 26);
-camera.lookAt(0, 0, 0);
+    // fade overlay for transitions
+    this.fadeEl = document.createElement('div');
+    this.fadeEl.style.cssText =
+      'position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .4s;z-index:90;';
+    this.uiRoot.appendChild(this.fadeEl);
 
-// --- validation content: hot star, shaded planet, particle starfield ---
-const rng = new RNG(42);
-const noise = new SimplexNoise(42);
+    this.hud = new HUD(this.uiRoot);
+    this.screens = new Screens(this.uiRoot);
+    notifications.init?.(this.uiRoot);
 
-const star = new THREE.Mesh(
-  new THREE.SphereGeometry(4, 48, 48),
-  new THREE.MeshBasicMaterial({ color: new THREE.Color(4.0, 2.6, 1.2) }) // HDR emissive → bloom
-);
-star.position.set(-14, 2, -10);
-scene.add(star);
+    this.state = null;       // active state object
+    this.paused = false;
+    this._dead = false;
 
-const planetGeo = new THREE.SphereGeometry(5, 96, 96);
-const pos = planetGeo.attributes.position;
-const colors = new Float32Array(pos.count * 3);
-const cA = new THREE.Color('#1c5d43'), cB = new THREE.Color('#c8b271'), cC = new THREE.Color('#274b8f');
-for (let i = 0; i < pos.count; i++) {
-  const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-  const n = noise.fbm3(x * 0.25, y * 0.25, z * 0.25, 5);
-  const c = n < -0.08 ? cC : n < 0.22 ? cA : cB;
-  colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+    // first user gesture unlocks audio
+    const unlock = () => { audio.init(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+  }
+
+  /** cross-state context handed to states */
+  get ctx() {
+    return {
+      engine: this.engine,
+      galaxy: this.galaxy,
+      gameState: this.gameState,
+      hud: this.hud,
+      screens: this.screens,
+      ui: this.ui,
+      fade: (s, color) => this.fade(s, color),
+      switchState: (name, params) => this.switchState(name, params),
+    };
+  }
+
+  async fade(seconds = 1, color = '#000000') {
+    this.fadeEl.style.background = color;
+    this.fadeEl.style.transition = `opacity ${seconds * 0.45}s`;
+    this.fadeEl.style.opacity = '1';
+    await new Promise((r) => setTimeout(r, seconds * 450));
+    // fade back out shortly after the new state settles
+    setTimeout(() => { this.fadeEl.style.opacity = '0'; }, 350);
+  }
+
+  bindWorld(gameState) {
+    this.gameState = gameState;
+    this.galaxy = new Galaxy(gameState.galaxySeed);
+    if (!this.gameState.currentSystemId) {
+      this.gameState.currentSystemId = this.galaxy.startingSystemId();
+    }
+    this.ui = {
+      inventory: new InventoryUI(gameState),
+      trade: new TradeUI(gameState),
+      map: new GalaxyMap(this.galaxy, gameState),
+      quest: new QuestUI(gameState),
+      build: new BuildUI(gameState),
+      anyOpen: () =>
+        !!(this.ui.inventory.isOpen || this.ui.trade.isOpen || this.ui.map.isOpen
+          || this.ui.quest.isOpen || this.screens.isOpen),
+    };
+    this.quests = new QuestSystem(gameState, this.galaxy);
+    this.quests.init?.();
+
+    events.on('player:death', () => this._onDeath());
+    events.on('audio:play', (name, opts) => audio.sfx(name, opts));
+  }
+
+  async switchState(name, params = {}) {
+    const old = this.state;
+    old?.exit?.();
+    const next = name === 'space' ? new SpaceState(this.ctx) : new SurfaceState(this.ctx);
+    this.state = next;
+    await next.enter(params);
+    this.engine.setScene(next.scene, next.camera, name === 'space'
+      ? { bloomStrength: 0.65, bloomRadius: 0.55, bloomThreshold: 0.8 }
+      : { bloomStrength: 0.4, bloomRadius: 0.5, bloomThreshold: 0.85 });
+    events.emit('state:change', name, old?.name);
+  }
+
+  async _onDeath() {
+    if (this._dead) return;
+    this._dead = true;
+    input.exitPointerLock();
+    audio.sfx('death');
+    await this.screens.dead?.();
+    const gs = this.gameState;
+    gs.health = gs.healthMax;
+    gs.shield = gs.shieldMax;
+    gs.oxygen = gs.oxygenMax;
+    gs.energy = gs.energyMax;
+    gs.ship.hull = gs.ship.hullMax;
+    this._dead = false;
+    // respawn at ship / in space near start of system
+    if (gs.location.mode === 'surface') {
+      await this.switchState('surface', { systemId: gs.currentSystemId, planetIndex: gs.location.planetIndex, landingPos: gs.location.landingPos });
+    } else {
+      gs.location.pos = null;
+      await this.switchState('space', { systemId: gs.currentSystemId });
+    }
+  }
+
+  async start() {
+    const q = new URLSearchParams(location.search);
+    const debugState = q.get('state');
+
+    if (debugState) {
+      // headless/debug boot: skip menu, deterministic world
+      const seed = Number(q.get('seed') ?? GALAXY_SEED_DEFAULT);
+      this.bindWorld(new GameState(seed));
+      if (debugState === 'surface') {
+        const planetIndex = Number(q.get('planet') ?? -1);
+        const sys = this.galaxy.getSystem(this.gameState.currentSystemId);
+        let idx = planetIndex;
+        if (q.get('biome')) {
+          idx = sys.planets.findIndex((p) => p.biome === q.get('biome'));
+        }
+        if (idx < 0) idx = 0;
+        await this.switchState('surface', {
+          systemId: this.gameState.currentSystemId,
+          planetIndex: idx,
+          landingPos: { x: 0, z: 0 },
+        });
+      } else {
+        await this.switchState('space', { systemId: this.gameState.currentSystemId, mode: 'start' });
+      }
+    } else {
+      await this._menuFlow();
+    }
+
+    this._loop();
+    window.__AMS__ = { ready: true, game: this };
+  }
+
+  async _menuFlow() {
+    const choice = await this.screens.mainMenu({ hasSave: GameState.hasSave() });
+    audio.init();
+    if (choice?.action === 'continue') {
+      const loaded = GameState.load();
+      if (loaded) {
+        this.bindWorld(loaded);
+        if (loaded.location.mode === 'surface') {
+          await this.switchState('surface', {
+            systemId: loaded.currentSystemId,
+            planetIndex: loaded.location.planetIndex,
+            landingPos: loaded.location.landingPos ?? { x: 0, z: 0 },
+            restorePos: true,
+          });
+        } else {
+          await this.switchState('space', { systemId: loaded.currentSystemId });
+        }
+        return;
+      }
+    }
+    // new voyage
+    const seed = choice?.seed ? hashString(String(choice.seed)) : GALAXY_SEED_DEFAULT;
+    GameState.clearSave();
+    this.bindWorld(new GameState(seed));
+    await this.switchState('space', { systemId: this.gameState.currentSystemId, mode: 'start' });
+    events.emit('notify', { text: 'THE VESPER SIGNAL CALLS. Fly close to a planet and press G to land.', tone: 'info' });
+  }
+
+  async _pause() {
+    if (this.paused || !this.state) return;
+    this.paused = true;
+    input.exitPointerLock();
+    const result = await this.screens.pause?.();
+    if (result === 'save-menu' || result?.action === 'save-menu') {
+      this.gameState.save();
+      location.reload();
+      return;
+    }
+    this.paused = false;
+  }
+
+  _loop() {
+    const frame = () => {
+      requestAnimationFrame(frame);
+      const dt = this.engine.tick();
+      if (this.state && !this.paused) {
+        // pointer lock on click into the world
+        if (input.mouseClicked[0] && !input.pointerLocked && !this.ui.anyOpen()) {
+          input.requestPointerLock();
+        }
+        if (input.actionPressed('escape')) {
+          if (this.ui.inventory.isOpen) this.ui.inventory.close();
+          else if (this.ui.trade.isOpen) this.ui.trade.close();
+          else if (this.ui.map.isOpen) this.ui.map.close();
+          else if (this.ui.quest.isOpen) this.ui.quest.close();
+          else if (!this.screens.isOpen) this._pause();
+        }
+        if (input.actionPressed('inventory') && !this.screens.isOpen) this.ui.inventory.toggle();
+        this.state.update(dt);
+      }
+      this.engine.render();
+      input.endFrame();
+    };
+    frame();
+  }
 }
-planetGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-const planet = new THREE.Mesh(planetGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
-planet.position.set(6, 0, 0);
-scene.add(planet);
 
-const starCount = 4000;
-const starPos = new Float32Array(starCount * 3);
-for (let i = 0; i < starCount; i++) {
-  const v = new THREE.Vector3(rng.gaussian(), rng.gaussian(), rng.gaussian()).normalize().multiplyScalar(900);
-  starPos.set([v.x, v.y, v.z], i * 3);
-}
-const starGeo = new THREE.BufferGeometry();
-starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
-scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false })));
-
-scene.add(new THREE.AmbientLight(0x334455, 0.4));
-const sun = new THREE.PointLight(0xfff2dd, 3000);
-sun.position.copy(star.position);
-scene.add(sun);
-
-engine.setScene(scene, camera);
-
-let elapsed = 0;
-function frame() {
-  const dt = engine.tick();
-  elapsed += dt;
-  planet.rotation.y += dt * 0.15;
-  camera.position.x = Math.sin(elapsed * 0.05) * 2;
-  engine.render();
-  input.endFrame();
-  requestAnimationFrame(frame);
-}
-frame();
-
-// smoke-test hook: lets headless tests confirm the engine came up
-window.__AMS__ = { ready: true, engine };
+const game = new Game();
+game.start().catch((err) => {
+  console.error('boot failed', err);
+  document.body.innerHTML = `<pre style="color:#ff5470;padding:40px;font-size:14px;">AllMansSky failed to start:\n${err.stack ?? err}</pre>`;
+});
