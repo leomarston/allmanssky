@@ -137,11 +137,14 @@ export class SurfaceState {
       storm: this.weather.intensity,
     });
     if (!uiOpen) {
-      this.mining.update(dt, this.camera, this);
-      this.combat.update(dt, this.camera, this.player);
       this.builder.update(dt, this.camera, this.player);
+      if (!this.builder.active) {
+        this.mining.update(dt, this.camera, this);
+      }
+      this.combat.suppressFire = this.builder.active;
+      this.combat.update(dt, this.camera, this.player);
       if (input.actionPressed('scan')) this.scanner.scan(this);
-      if (input.actionPressed('swapWeapon')) {
+      if (input.actionPressed('swapWeapon') && !this.builder.active) {
         gs.tool.mode = gs.tool.mode === 'mine' ? 'bolt' : 'mine';
         audio.sfx('click');
         events.emit('notify', { text: `ARCFORGE MODE: ${gs.tool.mode === 'mine' ? 'MINING BEAM' : 'BOLT CASTER'}`, tone: 'info' });

@@ -133,8 +133,9 @@ export class GroundCombat {
       }
     }
 
-    // player bolt fire (Arcforge bolt caster)
-    if (gs.tool.mode === 'bolt' && input.mouseDown[0] && input.pointerLocked && this._fireCd <= 0) {
+    // player bolt fire (Arcforge bolt caster; suppressed while build mode owns LMB)
+    if (gs.tool.mode === 'bolt' && !this.suppressFire
+      && input.mouseDown[0] && input.pointerLocked && this._fireCd <= 0) {
       this._fireCd = 0.24 / (1 + (gs.upgrades.toolBolt ?? 0) * 0.35);
       const dir = camera.getWorldDirection(_v1.set(0, 0, 0)).clone();
       dir.x += (Math.random() - 0.5) * 0.012;

@@ -122,7 +122,9 @@ export class QuestSystem {
     }));
 
     // surface first-beat: the Signal introduces itself on a fresh game
-    if (this.gs.quests.vesperDepth === 0 && !this.gs.quests.beatsSeen.includes('prologue')) {
+    // (skipped in ?state= debug boots so tests see the world, not the modal)
+    const debugBoot = typeof location !== 'undefined' && new URLSearchParams(location.search).has('state');
+    if (!debugBoot && this.gs.quests.vesperDepth === 0 && !this.gs.quests.beatsSeen.includes('prologue')) {
       this.gs.quests.beatsSeen.push('prologue');
       setTimeout(() => {
         events.emit('lore:show', {
