@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>inventory — exosuit interface test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128188;</text></svg>">
+  <link rel="stylesheet" href="/src/ui/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+  <style>
+    body { background: radial-gradient(120% 100% at 50% 0%, #08141c, #01050a); }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="ui-root"></div>
+  </div>
+  <script type="module">
+    import { GameState } from '/src/gameplay/state.js';
+    import { InventoryUI } from '/src/ui/inventoryui.js';
+
+    const gs = new GameState(1337);
+
+    // -- cargo: a well-travelled hold (19 item types across every category)
+    const stock = [
+      ['ferrox', 142], ['carbyne', 76], ['oxylite', 38], ['silica', 90],
+      ['pyrene', 47], ['voidsalt', 12], ['aurium', 9], ['cryostal', 21],
+      ['solanite', 14], ['chlorophane', 26], ['voltglass', 7], ['nebulite', 3],
+      ['ferroweave', 6], ['luminglass', 4], ['weavecircuit', 2], ['voidcell', 1],
+      ['stimgel', 5], ['aegiscell', 2], ['luminelshard', 1],
+    ];
+    for (const [id, qty] of stock) gs.addItem(id, qty);
+
+    // -- vitals / economy
+    gs.health = 72; gs.shield = 31; gs.oxygen = 58; gs.energy = 22;
+    gs.lumens = 12470;
+
+    // -- upgrades / ship / stats
+    gs.upgrades.shipSpeed = 2; gs.upgrades.shipShield = 1;
+    gs.upgrades.toolMine = 1; gs.upgrades.suitEnergy = 3;
+    gs.ship.hull = 82; gs.ship.fuel = 0.63; gs.ship.warpCells = 2;
+    gs.stats.warps = 7; gs.stats.planetsVisited = 12;
+    gs.stats.creaturesScanned = 23; gs.stats.distanceOnFoot = 48231;
+
+    // -- discoveries
+    const d = gs.discoveries;
+    ['Vell Cressida', 'Auber Deep', 'Kessarine'].forEach((n, i) => { d.systems['s' + i] = { name: n }; });
+    ['Thunder', 'Palegrove', 'Ashenmoor', 'Brinefall'].forEach((n, i) => { d.planets['p' + i] = { name: n }; });
+    ['Duskstrider', 'Gallowfinch'].forEach((n, i) => { d.creatures['c' + i] = { name: n }; });
+    d.flora.f0 = { name: 'Lantern Fern' };
+    d.ruins.r0 = { name: 'Halcyon Vault' };
+
+    const inv = new InventoryUI(gs);
+    inv.open();
+
+    // ?tab=2 → FABRICATE, ?tab=3 → STATUS (screenshot helpers, test page only)
+    const tab = new URLSearchParams(location.search).get('tab');
+    if (tab === '2') document.querySelector('[data-tab="fabricate"]')?.click();
+    else if (tab === '3') document.querySelector('[data-tab="status"]')?.click();
+    else {
+      // hover a canister so the detail card renders in the screenshot
+      const cell = document.querySelector('[data-slot-id="nebulite"]')
+        ?? document.querySelector('[data-slot-id]');
+      cell?.dispatchEvent(new MouseEvent('mouseenter'));
+    }
+
+    window.__AMS__ = { ready: true };
+  </script>
+</body>
+</html>

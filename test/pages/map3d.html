@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>map3d — holographic star chart test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128506;</text></svg>">
+  <link rel="stylesheet" href="/src/ui/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div id="ui-root"></div>
+  </div>
+  <script type="module">
+    import { Galaxy } from '/src/universe/galaxy.js';
+    import { GalaxyMap } from '/src/ui/mapui.js';
+
+    const galaxy = new Galaxy(1337);
+    const currentId = galaxy.startingSystemId();
+    const neighbors = galaxy.neighborsOf(currentId, 4);
+
+    // minimal fake gameState honoring the GalaxyMap contract
+    const gameState = {
+      currentSystemId: currentId,
+      visitedSystems: [currentId, ...neighbors.slice(0, 3).map((n) => n.id)],
+      quests: { vesperTarget: neighbors[5]?.id ?? neighbors[0]?.id ?? null },
+    };
+
+    const map = new GalaxyMap(galaxy, gameState);
+    map.open();
+    window.__MAP__ = map; // handy for manual poking in devtools
+
+    requestAnimationFrame(() => { window.__AMS__ = { ready: true }; });
+  </script>
+</body>
+</html>
