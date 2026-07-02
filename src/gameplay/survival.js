@@ -35,11 +35,13 @@ export class Survival {
       gs.oxygen = Math.min(gs.oxygenMax, gs.oxygen + 6 * dt);
     }
 
-    // hazard protection drains suit energy; empty energy → health drain
+    // hazard protection drains suit energy; empty energy → health drain.
+    // storms multiply exposure — shelter or suffer.
     if (def && !ctx.inShip) {
       const heat = ctx.isNight ? 0 : def.hazard.heat;
       const cold = ctx.isNight ? Math.max(def.hazard.cold, def.hazard.cold > 0 ? 0.15 : 0) : def.hazard.cold * 0.5;
-      const hazard = Math.max(heat, cold, def.hazard.toxic, def.hazard.rad);
+      const storm = 1 + (ctx.storm ?? 0) * 1.6;
+      const hazard = Math.max(heat, cold, def.hazard.toxic, def.hazard.rad) * storm;
       if (hazard > 0.2) {
         gs.energy = Math.max(0, gs.energy - hazard * 2.4 * dt);
         if (gs.energy <= 0) this._damageOverTime(hazard * 5 * dt, 'hazard');

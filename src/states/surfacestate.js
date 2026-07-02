@@ -18,6 +18,7 @@ import { GroundMining } from '../gameplay/mining.js';
 import { Scanner } from '../gameplay/scanner.js';
 import { GroundCombat } from '../gameplay/combat.js';
 import { BaseBuilder } from '../gameplay/basebuilding.js';
+import { WeatherSystem } from '../render/weather.js';
 import { audio } from '../audio/audio.js';
 
 const BOARD_RANGE = 6;
@@ -54,6 +55,7 @@ export class SurfaceState {
     this.creatures = new CreatureSystem(this.scene, this.def, this.field);
     this.props = new PropManager(this.scene, this.def, this.field);
     this.effects = new EffectsSystem(this.scene);
+    this.weather = new WeatherSystem(this.scene, this.def, this.def.seed);
 
     // parked ship
     const lp = gs.location.landingPos;
@@ -124,6 +126,7 @@ export class SurfaceState {
     this.creatures.update(dt, this.player.position);
     this.props.update(this.player.position);
     this.effects.update(dt);
+    this.weather.update(dt, this.player.position, sunElev);
 
     this.survival.update(dt, {
       planetDef: this.def,
@@ -131,6 +134,7 @@ export class SurfaceState {
       inShip: false,
       moving: this.player.speed > 0.5,
       sprinting: input.action('sprint') && this.player.speed > 7,
+      storm: this.weather.intensity,
     });
     if (!uiOpen) {
       this.mining.update(dt, this.camera, this);
@@ -254,6 +258,7 @@ export class SurfaceState {
       gs.location.mode = 'surface';
     }
     this.terrain?.dispose?.();
+    this.weather?.dispose?.();
     this.sky?.dispose?.();
     this.flora?.dispose?.();
     this.creatures?.dispose?.();

@@ -13,6 +13,7 @@ import { EffectsSystem } from '../render/effects.js';
 import { ShipController } from '../gameplay/shipcontrol.js';
 import { SpaceCombat } from '../gameplay/combat.js';
 import { SpaceMining } from '../gameplay/mining.js';
+import { SpaceLife } from '../gameplay/spacelife.js';
 import { audio } from '../audio/audio.js';
 
 const LAND_RANGE = 1.75;      // multiples of planet display radius
@@ -86,6 +87,7 @@ export class SpaceState {
     this.trail = this.effects.engineTrail?.(shipBuild.group, '#7de8ff') ?? null;
     this.combat = new SpaceCombat(this.scene, this.effects, gs, this.system, this.shipCtl);
     this.mining = new SpaceMining(this.scene, this.effects, gs, this);
+    this.life = new SpaceLife(this.scene, this.system, gs, this);
 
     ctx.hud.setMode('space');
     audio.setScene('space', { danger: this.system.pirateThreat });
@@ -192,6 +194,8 @@ export class SpaceState {
     this.mining.update(dt, this.camera);
 
     if (!this._warping) this._interactions(dt);
+    // after _interactions so anomaly prompts can claim the interact label
+    this.life.update(dt, this.shipCtl.position);
     this._hud(dt);
   }
 
@@ -324,6 +328,7 @@ export class SpaceState {
     this.effects?.dispose?.();
     this.mining?.dispose?.();
     this.combat?.dispose?.();
+    this.life?.dispose?.();
     for (const p of this.planets) p.visual.dispose?.();
     this.starfield?.object3d && this.scene.remove(this.starfield.object3d);
     this.scene = null;

@@ -1,34 +1,208 @@
-// Quests & the Vesper Signal — STUB pending fan-out #2.
-// CONTRACT:
-//   new QuestSystem(gameState, galaxy)
-//     .init()        — ensure the Vesper Signal quest chain exists; listens to
-//                      events (warp:end, resource:mined, discovery:new) to
-//                      advance procedural quests.
-//     .update(dt)
-//   gameState.quests.vesperTarget — systemId the Signal currently points to;
-//     shown on galaxy map, preferred by J-warp.
+// Quests: the Vesper Signal main chain (lore transmissions that pull the
+// Wayfarer deeper into the Reach) plus procedural side contracts that track
+// themselves through gameplay events.
+//
+// CONTRACT: new QuestSystem(gameState, galaxy) → .init() .update(dt)
+//   gameState.quests.vesperTarget — systemId the Signal points to (J-warp).
 import { events } from '../core/events.js';
+import { RNG, hash32, hashString } from '../core/rng.js';
+import { ITEMS } from './items.js';
+import { audio } from '../audio/audio.js';
+
+// The Signal's story, told in fragments at increasing warp depth.
+const VESPER_BEATS = [
+  { depth: 1, title: 'First Clarity', reward: { lumens: 300 }, text: 'The Signal resolves for a heartbeat: not a beacon, not a distress call. A voice, counting. It has been counting for eleven thousand years, and it has just noticed you listening.' },
+  { depth: 3, title: 'The Listener', reward: { lumens: 500, items: [['voidcell', 1]] }, text: 'Three jumps deep, the count grows louder. Between the numbers now: a name. Yours. The Luminel folded themselves into light — but light must be witnessed to exist, and the Reach has been dark so long.' },
+  { depth: 5, title: 'What The Wardens Keep', reward: { lumens: 800 }, text: 'The Wardens do not guard the ruins. They guard the silence. Every crystal you cut rings like a bell in a cathedral no one prays in, and the machines remember when the music stopped.' },
+  { depth: 8, title: 'The Last Chorister', reward: { lumens: 1200, items: [['voidcell', 1]] }, text: 'One of them stayed behind. When the Luminel became light, one voice remained to keep the count — to remember the shape of every soul that left. The Vesper Signal is not calling you somewhere. It is calling you SOMEONE.' },
+  { depth: 12, title: 'The Shape Of The Reach', reward: { lumens: 1600, items: [['nebulite', 6]] }, text: 'Chart your jumps and see: the path the Signal draws is a spiral, tightening. At its center, the galaxy keeps a room no star has entered. The Chorister is there, still counting. It is nearly done.' },
+  { depth: 16, title: 'Witness', reward: { lumens: 2400, items: [['luminelshard', 3]] }, text: 'The count ends with you. The Chorister asked for a witness, and the Reach sent a Wayfarer with dust on their boots and someone else\'s ship. It is enough. Somewhere behind the light, eleven thousand years of held breath release. The Signal does not stop — but now, it sings.' },
+];
+
+// side-contract templates: each tracks an event and a count
+const CONTRACT_TEMPLATES = [
+  {
+    kind: 'prospect',
+    make: (rng, resources) => {
+      const id = rng.pick(resources ?? ['ferrox', 'carbyne', 'silica']);
+      const n = rng.int(10, 30);
+      return {
+        title: `Prospect: ${ITEMS[id]?.name ?? id} ×${n}`,
+        desc: `The Meridian Combine pays for raw ${ITEMS[id]?.name ?? id}.`,
+        event: 'resource:mined', filterId: id, need: n,
+        reward: { lumens: n * (ITEMS[id]?.value ?? 6) * 2 },
+      };
+    },
+  },
+  {
+    kind: 'cartograph',
+    make: (rng) => {
+      const n = rng.int(2, 4);
+      return {
+        title: `Cartograph: scan ${n} lifeforms`,
+        desc: 'The Choir of Glass catalogues every voice in the Reach.',
+        event: 'discovery:new', filterKind: 'creatures', need: n,
+        reward: { lumens: 600, items: [['chlorophane', 3]] },
+      };
+    },
+  },
+  {
+    kind: 'pilgrimage',
+    make: () => ({
+      title: 'Pilgrimage: commune with a ruin',
+      desc: 'Find a Luminel ruin or beacon and listen.',
+      event: 'discovery:new', filterKind: 'ruins', need: 1,
+      reward: { lumens: 500, items: [['voidsalt', 2]] },
+    }),
+  },
+  {
+    kind: 'purge',
+    make: (rng) => {
+      const n = rng.int(2, 4);
+      return {
+        title: `Purge: destroy ${n} Wardens`,
+        desc: 'The Sunward Kin pay for every custodian scrapped.',
+        event: 'combat:wardenKilled', need: n,
+        reward: { lumens: 900, items: [['solanite', 2]] },
+      };
+    },
+  },
+  {
+    kind: 'bounty',
+    make: (rng) => {
+      const n = rng.int(1, 3);
+      return {
+        title: `Bounty: down ${n} Ashen raider${n > 1 ? 's' : ''}`,
+        desc: 'The Combine insures its lanes in blood money.',
+        event: 'combat:pirateKilled', need: n,
+        reward: { lumens: 1100 },
+      };
+    },
+  },
+];
+
+const MAX_ACTIVE = 3;
 
 export class QuestSystem {
   constructor(gs, galaxy) {
     this.gs = gs;
     this.galaxy = galaxy;
+    this._offs = [];
   }
 
   init() {
+    const q = this.gs.quests;
+    q.active ??= [];
+    q.completed ??= [];
+    q.vesperDepth ??= 0;
+    q.beatsSeen ??= [];
+
     this._retarget();
-    events.on('warp:end', () => {
+    this._refill();
+
+    this._offs.push(events.on('warp:end', () => {
       this.gs.quests.vesperDepth += 1;
       this._retarget();
-      if ([3, 7, 12].includes(this.gs.quests.vesperDepth)) {
-        events.emit('notify', { text: 'THE VESPER SIGNAL GROWS CLEARER…', tone: 'info' });
+      this._checkBeats();
+      this._refill();
+    }));
+
+    // generic contract progress
+    this._offs.push(events.on('resource:mined', ({ id, amount }) => {
+      this._progress('resource:mined', (c) => (c.filterId === id ? amount : 0));
+    }));
+    this._offs.push(events.on('discovery:new', ({ kind }) => {
+      this._progress('discovery:new', (c) => (c.filterKind === kind ? 1 : 0));
+    }));
+    this._offs.push(events.on('combat:wardenKilled', () => {
+      this._progress('combat:wardenKilled', () => 1);
+    }));
+    this._offs.push(events.on('combat:pirateKilled', () => {
+      this._progress('combat:pirateKilled', () => 1);
+    }));
+
+    // surface first-beat: the Signal introduces itself on a fresh game
+    if (this.gs.quests.vesperDepth === 0 && !this.gs.quests.beatsSeen.includes('prologue')) {
+      this.gs.quests.beatsSeen.push('prologue');
+      setTimeout(() => {
+        events.emit('lore:show', {
+          title: 'The Vesper Signal',
+          text: 'It woke you from cryo-drift with a sound like a struck glass. Every chart you own marks this arm of the galaxy VACANT. The Signal disagrees. Follow it — one warp at a time — and find out which of you is lying.',
+        });
+      }, 12000);
+    }
+  }
+
+  _progress(eventName, countFn) {
+    const q = this.gs.quests;
+    let changed = false;
+    for (const c of q.active) {
+      if (c.event !== eventName || c.done) continue;
+      const inc = countFn(c);
+      if (!inc) continue;
+      c.have = Math.min(c.need, (c.have ?? 0) + inc);
+      changed = true;
+      if (c.have >= c.need) {
+        c.done = true;
+        this._complete(c);
       }
+    }
+    if (changed) events.emit('quest:updated');
+  }
+
+  _complete(c) {
+    const gs = this.gs;
+    gs.quests.active = gs.quests.active.filter((x) => x !== c);
+    gs.quests.completed.push(c.title);
+    if (c.reward?.lumens) gs.addLumens(c.reward.lumens);
+    for (const [id, qty] of c.reward?.items ?? []) gs.addItem(id, qty);
+    audio.sfx('discovery');
+    events.emit('notify', {
+      text: `CONTRACT COMPLETE — ${c.title}  (+${c.reward?.lumens ?? 0} ⌾)`,
+      tone: 'good',
     });
+    this._refill();
+    events.emit('quest:updated');
+  }
+
+  _refill() {
+    const gs = this.gs;
+    const q = gs.quests;
+    const rng = new RNG(hash32(hashString(gs.currentSystemId ?? 'x'), q.completed.length, q.active.length));
+    let guard = 0;
+    while (q.active.length < MAX_ACTIVE && guard++ < 10) {
+      const tpl = rng.pick(CONTRACT_TEMPLATES);
+      // current system's first planet resources flavor prospect contracts
+      let resources = null;
+      try { resources = this.galaxy.getSystem(gs.currentSystemId)?.planets?.[0]?.resources; } catch { /* fine */ }
+      const c = tpl.make(rng.fork(`c${q.active.length}${guard}`), resources);
+      if (q.active.some((a) => a.title === c.title)) continue;
+      c.have = 0;
+      c.done = false;
+      c.kind = tpl.kind;
+      q.active.push(c);
+    }
+    events.emit('quest:updated');
+  }
+
+  _checkBeats() {
+    const q = this.gs.quests;
+    for (const beat of VESPER_BEATS) {
+      if (q.vesperDepth >= beat.depth && !q.beatsSeen.includes(beat.title)) {
+        q.beatsSeen.push(beat.title);
+        if (beat.reward?.lumens) this.gs.addLumens(beat.reward.lumens);
+        for (const [id, qty] of beat.reward?.items ?? []) this.gs.addItem(id, qty);
+        events.emit('lore:show', { title: beat.title, text: beat.text });
+        events.emit('notify', { text: `THE VESPER SIGNAL — ${beat.title} (+${beat.reward?.lumens ?? 0} ⌾)`, tone: 'info' });
+        audio.sfx('discovery');
+        break; // one beat per jump — savor it
+      }
+    }
   }
 
   _retarget() {
-    // the Signal always points one hop deeper: pick the unvisited neighbor
-    // furthest from the galactic origin (deeper into the Reach)
+    // the Signal points one hop deeper: the unvisited neighbor furthest from
+    // the galactic origin
     try {
       const neighbors = this.galaxy.neighborsOf(this.gs.currentSystemId, 3) ?? [];
       const unvisited = neighbors.filter((n) => !this.gs.visitedSystems.includes(n.id));
@@ -39,4 +213,6 @@ export class QuestSystem {
   }
 
   update(dt) {}
+
+  dispose() { for (const off of this._offs) off?.(); }
 }

@@ -18,7 +18,7 @@ const MAX_PER_CELL = 14;  // archetype instances at density 1, moisture 1
 // ------------------------------------------------------------- color helpers
 
 const NATURE = {
-  leaf: 0x4c9440, leafDark: 0x2f6b33, trunk: 0x6f4b32, trunkDark: 0x46331f,
+  leaf: 0x58a54b, leafDark: 0x3d7f42, trunk: 0x6f4b32, trunkDark: 0x46331f,
   dry: 0xb9a05f, dryDark: 0x8a744a, snow: 0xe9f3fb, pine: 0x2f5d44,
   char: 0x201b17, ember: 0xff7a2a, sick: 0x8fd44a, bone: 0xcfc4ae,
 };

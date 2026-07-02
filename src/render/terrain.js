@@ -20,6 +20,41 @@ function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 function smooth01(t) { return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t); }
 function toColor(v, fallback) { return new THREE.Color(v ?? fallback); }
 
+/**
+ * Seamless-tiling noise texture for ground detail. R = fine grain (sampled
+ * ~5 m tiles), G = broad mottle (~32 m tiles). Sampled in world space.
+ */
+function makeDetailTexture(seed) {
+  const S = 256;
+  const n1 = new SimplexNoise(hash32(seed, 771));
+  const n2 = new SimplexNoise(hash32(seed, 772));
+  const img = new Uint8Array(S * S * 4);
+  const TAU = Math.PI * 2;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      // torus-sample the noise so the tile wraps seamlessly
+      const a = (x / S) * TAU, b = (y / S) * TAU;
+      const nx = Math.cos(a) * 1.6, ny = Math.sin(a) * 1.6;
+      const nz = Math.cos(b) * 1.6, nw = Math.sin(b) * 1.6;
+      const fine = n1.fbm3(nx * 2.3 + nz * 1.7, ny * 2.3 + nw * 1.7, nz * 2.9, 4)
+        + n1.noise3D(nx * 7.1, ny * 7.1, nz * 7.1 + nw * 3.3) * 0.35;
+      const mid = n2.fbm3(nx + nz * 0.8, ny + nw * 0.8, nw * 1.2, 3);
+      const i = (y * S + x) * 4;
+      img[i] = Math.max(0, Math.min(255, 128 + fine * 108));
+      img[i + 1] = Math.max(0, Math.min(255, 128 + mid * 118));
+      img[i + 2] = 128;
+      img[i + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(img, S, S, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 const _c = new THREE.Color();
 const _lowC = new THREE.Color();
 const _midC = new THREE.Color();
@@ -161,6 +196,27 @@ export class TerrainRenderer {
     this.material = new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 0.95, metalness: 0.0,
     });
+    // world-space detail albedo: vertex colors are ~2 m resolution, far too
+    // coarse to read up close — two octaves of tiling noise carry the sub-metre
+    // grain (soil mottle + fine speckle) that makes ground feel material
+    this._detailTex = makeDetailTexture(seed);
+    this.material.onBeforeCompile = (shader) => {
+      shader.uniforms.uDetail = { value: this._detailTex };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vAmsWorld;')
+        .replace('#include <begin_vertex>',
+          '#include <begin_vertex>\nvAmsWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform sampler2D uDetail;\nvarying vec3 vAmsWorld;')
+        .replace('#include <color_fragment>', [
+          '#include <color_fragment>',
+          'float dNear = texture2D(uDetail, vAmsWorld.xz * 0.19).r;',
+          'float dMid  = texture2D(uDetail, vAmsWorld.xz * 0.031).g;',
+          'float dFade = 1.0 - smoothstep(60.0, 260.0, length(vAmsWorld - cameraPosition));',
+          'diffuseColor.rgb *= 1.0 + (dNear - 0.5) * 0.34 * dFade + (dMid - 0.5) * 0.22;',
+        ].join('\n'));
+    };
+    this.material.customProgramCacheKey = () => 'ams-terrain-detail';
 
     // chunk bookkeeping
     this.chunks = new Map();               // "cx,cz" -> { mesh, lod, cx, cz }
@@ -324,11 +380,13 @@ export class TerrainRenderer {
     // snow caps settle on flat-ish ground above the snow line
     const sn = smooth01((h - this._snowY) / 9) * (1 - smooth01((slope - 0.25) / 0.25));
     if (sn > 0) out.lerp(this._snow, sn * 0.95);
-    // noise dithering against banding
-    const f = 1 + this._nDither.noise2D(wx * 0.31, wz * 0.31) * 0.045;
-    out.r = clamp01(out.r * f);
-    out.g = clamp01(out.g * f);
-    out.b = clamp01(out.b * f);
+    // noise dithering against banding: fine grain + a slightly hue-shifted
+    // mid-scale mottle so close-up ground never reads as one flat wash
+    const f = 1 + this._nDither.noise2D(wx * 0.31, wz * 0.31) * 0.08;
+    const mot = this._nDither.noise2D(wx * 0.045 + 37.2, wz * 0.045 - 11.8) * 0.07;
+    out.r = clamp01(out.r * (f + mot * 0.6));
+    out.g = clamp01(out.g * (f + mot));
+    out.b = clamp01(out.b * (f + mot * 0.3));
   }
 
   _buildChunk(cx, cz, lod) {
@@ -463,6 +521,7 @@ export class TerrainRenderer {
       bucket.length = 0;
     }
     this.material.dispose();
+    this._detailTex.dispose();
     if (this._sea) {
       this.group.remove(this._sea);
       this._sea.geometry.dispose();

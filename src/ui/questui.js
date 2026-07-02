@@ -1,6 +1,6 @@
-// Quest log + lore reader — STUB pending fan-out #2. CONTRACT:
-//   new QuestUI(gameState) → .isOpen; listens 'lore:show' events and displays
-//   Luminel fragments in a modal.
+// Quest UI: Luminel lore modal (listens 'lore:show') + a passive contract
+// tracker pinned under the vitals cluster.
+// CONTRACT: new QuestUI(gameState) → .isOpen ; events-driven.
 import { events } from '../core/events.js';
 import { audio } from '../audio/audio.js';
 
@@ -9,21 +9,53 @@ export class QuestUI {
     this.gs = gs;
     this.root = null;
     events.on('lore:show', (lore) => this.showLore(lore));
+
+    // passive tracker
+    this.tracker = document.createElement('div');
+    this.tracker.style.cssText = [
+      'position:absolute', 'left:18px', 'top:212px', 'width:250px',
+      'display:flex', 'flex-direction:column', 'gap:5px',
+      'pointer-events:none', 'z-index:5',
+    ].join(';');
+    document.getElementById('ui-root')?.appendChild(this.tracker);
+    this._renderTracker();
+    events.on('quest:updated', () => this._renderTracker());
+    events.on('state:change', () => this._renderTracker());
   }
+
   get isOpen() { return !!this.root; }
+
+  _renderTracker() {
+    const active = this.gs?.quests?.active ?? [];
+    this.tracker.innerHTML = active.length
+      ? `<div class="ams-label" style="opacity:.75;margin-bottom:2px;">CONTRACTS</div>`
+        + active.map((c) => `
+          <div style="background:rgba(6,16,22,.55);border-left:2px solid var(--ui-cyan,#7de8ff);padding:5px 9px;backdrop-filter:blur(3px);">
+            <div style="font-size:11px;letter-spacing:.06em;color:var(--ui-ink,#d6f2ff);">${c.title}</div>
+            <div style="font-size:10px;color:var(--ui-dim,#7fa3b4);margin-top:1px;">
+              ${c.have ?? 0} / ${c.need}
+              <span style="display:inline-block;width:70px;height:3px;background:#0a1a22;margin-left:6px;vertical-align:middle;">
+                <span style="display:block;height:100%;width:${Math.round(100 * (c.have ?? 0) / c.need)}%;background:var(--ui-cyan,#7de8ff);"></span>
+              </span>
+            </div>
+          </div>`).join('')
+      : '';
+  }
 
   showLore(lore) {
     this.root?.remove();
     const r = document.createElement('div');
-    r.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,4,10,.7);backdrop-filter:blur(5px);z-index:45;';
-    r.innerHTML = `<div style="max-width:560px;background:rgba(10,14,26,.94);border:1px solid #ffffff44;padding:34px 40px;color:#e8ecff;font-family:Georgia,serif;text-align:center;">
-      <div style="letter-spacing:.3em;color:#7de8ff;font-family:system-ui;font-size:12px;margin-bottom:14px;">LUMINEL FRAGMENT</div>
-      <h2 style="font-weight:400;margin-bottom:16px;">${lore.title}</h2>
-      <p style="line-height:1.7;opacity:.9;font-style:italic;">${lore.text}</p>
-      <button id="lore-close" style="margin-top:22px;background:none;border:1px solid #7de8ff66;color:#7de8ff;padding:8px 26px;cursor:pointer;letter-spacing:.2em;font-family:system-ui;">CONTINUE</button>
+    r.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,4,10,.72);backdrop-filter:blur(6px);z-index:45;animation:ams-flicker-in .5s;';
+    r.innerHTML = `<div style="max-width:580px;background:rgba(10,14,26,.94);border:1px solid rgba(255,255,255,.28);padding:38px 46px;color:#e8ecff;font-family:Georgia,'Times New Roman',serif;text-align:center;box-shadow:0 0 60px rgba(125,232,255,.12);">
+      <div style="letter-spacing:.34em;color:#7de8ff;font-family:var(--ui-font,system-ui);font-size:11px;margin-bottom:16px;">◈ LUMINEL TRANSMISSION ◈</div>
+      <h2 style="font-weight:400;margin-bottom:18px;font-size:24px;">${lore.title}</h2>
+      <p style="line-height:1.75;opacity:.92;font-style:italic;font-size:15px;">${lore.text}</p>
+      <button id="lore-close" style="margin-top:26px;background:none;border:1px solid rgba(125,232,255,.4);color:#7de8ff;padding:9px 30px;cursor:pointer;letter-spacing:.22em;font-family:var(--ui-font,system-ui);font-size:11px;">CONTINUE</button>
     </div>`;
     document.getElementById('ui-root').appendChild(r);
-    r.querySelector('#lore-close').onclick = () => { this.close(); audio.sfx('click'); };
+    const close = () => { this.close(); audio.sfx('click'); };
+    r.querySelector('#lore-close').onclick = close;
+    r.addEventListener('click', (e) => { if (e.target === r) close(); });
     this.root = r;
   }
 

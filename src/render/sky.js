@@ -183,8 +183,9 @@ export class SkyDome {
     const sc = this.light.shadow.camera;
     sc.near = 40; sc.far = 1100;
     sc.left = -160; sc.right = 160; sc.top = 160; sc.bottom = -160;
+    sc.updateProjectionMatrix();
     this.light.shadow.bias = -0.0005;
-    this.light.shadow.normalBias = 2.0;
+    this.light.shadow.normalBias = 1.0;
     scene.add(this.light);
     scene.add(this.light.target);
 
@@ -245,7 +246,7 @@ export class SkyDome {
       this.light.target.position.copy(camPos);
     }
 
-    this.ambient.intensity = 0.22 + 0.62 * day;
+    this.ambient.intensity = 0.3 + 0.9 * day;
     this.ambient.color.copy(this._zenith).lerp(new THREE.Color(1, 1, 1), 0.2)
       .lerp(new THREE.Color(0.12, 0.16, 0.3), night);
   }
