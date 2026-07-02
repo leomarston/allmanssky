@@ -135,6 +135,7 @@ class Game {
       // headless/debug boot: skip menu, deterministic world
       const seed = Number(q.get('seed') ?? GALAXY_SEED_DEFAULT);
       this.bindWorld(new GameState(seed));
+      if (q.get('system')) this.gameState.currentSystemId = q.get('system');
       if (debugState === 'surface') {
         const planetIndex = Number(q.get('planet') ?? -1);
         const sys = this.galaxy.getSystem(this.gameState.currentSystemId);

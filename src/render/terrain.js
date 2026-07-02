@@ -159,7 +159,9 @@ export class TerrainRenderer {
     this.scene = scene;
     this.def = def;
     this.field = field;
-    this.viewChunks = opts.viewChunks ?? 12;
+    // 9-chunk ring ≈ 576 m — the fog wall sits inside that, so farther chunks
+    // were paying draw calls for pixels the fog already owns
+    this.viewChunks = opts.viewChunks ?? 9;
 
     this.group = new THREE.Group();
     this.group.name = 'terrain';

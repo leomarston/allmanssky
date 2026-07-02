@@ -84,6 +84,11 @@ export class SurfaceState {
     this.combat = new GroundCombat(this.scene, this.effects, gs, this);
     this.builder = new BaseBuilder(this.scene, this.field, gs, this.systemId, this.planetIndex);
 
+    // suit headlamp (T)
+    this.torch = new THREE.SpotLight(0xf2ecd8, 0, 60, 0.52, 0.45, 1.2);
+    this.torch.visible = false;
+    this.scene.add(this.torch, this.torch.target);
+
     // day cycle: deterministic phase per planet, advances in real time
     this.timeOfDay = ((this.def.seed % 1000) / 1000 + 0.28) % 1;
     const todOverride = new URLSearchParams(location.search).get('tod');
@@ -121,6 +126,11 @@ export class SurfaceState {
     gs.jetpack = this.player.jetpack;
     gs.stats.distanceOnFoot += this.player.speed * dt;
 
+    if (this.torch.visible) {
+      this.torch.position.copy(this.camera.position);
+      this.camera.getWorldDirection(this.torch.target.position)
+        .multiplyScalar(30).add(this.camera.position);
+    }
     this.terrain.update(dt, this.player.position);
     this.flora.update(dt, this.player.position);
     this.creatures.update(dt, this.player.position);
@@ -143,6 +153,11 @@ export class SurfaceState {
       }
       this.combat.suppressFire = this.builder.active;
       this.combat.update(dt, this.camera, this.player);
+      if (input.actionPressed('torch')) {
+        this.torch.visible = !this.torch.visible;
+        this.torch.intensity = this.torch.visible ? 160 : 0;
+        audio.sfx('click');
+      }
       if (input.actionPressed('scan')) this.scanner.scan(this);
       if (input.actionPressed('swapWeapon') && !this.builder.active) {
         gs.tool.mode = gs.tool.mode === 'mine' ? 'bolt' : 'mine';
