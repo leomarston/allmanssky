@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cosmos — starfield + nebula test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127756;</text></svg>">
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #game-canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { createStarfield } from '/src/render/starfield.js';
+    import { createNebulaField } from '/src/render/nebula.js';
+
+    const canvas = document.getElementById('game-canvas');
+    const engine = new Engine(canvas);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 4e6);
+    camera.position.set(0, 0, 0);
+
+    const SEED = Number(new URLSearchParams(location.search).get('seed')) || 1337;
+    const starfield = createStarfield(SEED);
+    scene.add(starfield.object3d);
+    const nebulae = createNebulaField(SEED);
+    scene.add(nebulae.object3d);
+
+    // aim the camera at the first nebula cluster (composition anchor)
+    const cluster = nebulae.object3d.children.find((c) => c.userData.isCluster);
+    const target = cluster.getWorldPosition(new THREE.Vector3());
+    camera.lookAt(target);
+    // nudge so the cluster sits off-center (rule of thirds)
+    camera.rotateY(-0.28);
+    camera.rotateX(0.08);
+    const baseQuat = camera.quaternion.clone();
+
+    // dark foreground planet for contrast, placed down-right of the view
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(baseQuat);
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(baseQuat);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(baseQuat);
+    const planetPos = fwd.clone().multiplyScalar(340)
+      .addScaledVector(right, 130).addScaledVector(up, -95);
+    const planet = new THREE.Mesh(
+      new THREE.SphereGeometry(72, 64, 64),
+      new THREE.MeshStandardMaterial({ color: 0x39424c, roughness: 0.92, metalness: 0.04 })
+    );
+    planet.position.copy(planetPos);
+    scene.add(planet);
+
+    // cool light from behind-left of the planet → thin crescent facing camera
+    const rim = new THREE.DirectionalLight(0xbfd8ff, 14.0);
+    rim.position.copy(planetPos).addScaledVector(right, -350).addScaledVector(up, 220).addScaledVector(fwd, 300);
+    rim.target.position.copy(planetPos);
+    scene.add(rim, rim.target);
+    scene.add(new THREE.AmbientLight(0x223044, 0.12));
+
+    engine.setScene(scene, camera, { bloomStrength: 0.8, bloomRadius: 0.7, bloomThreshold: 0.85 });
+    engine.setExposure(1.1);
+
+    let t = 0;
+    let ready = false;
+    const yawAxis = new THREE.Vector3(0, 1, 0);
+    const qPan = new THREE.Quaternion();
+    function frame() {
+      const dt = engine.tick();
+      t += dt;
+      starfield.update(dt, camera.quaternion);
+      nebulae.update(dt);
+      // slow cinematic pan
+      qPan.setFromAxisAngle(yawAxis, Math.sin(t * 0.1) * 0.05);
+      camera.quaternion.copy(qPan).multiply(baseQuat);
+      engine.render();
+      if (!ready) { ready = true; window.__AMS__ = { ready: true }; }
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

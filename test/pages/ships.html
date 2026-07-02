@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>shipmesh test — hangar lineup</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'></svg>">
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #game-canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { buildShip, buildStation } from '/src/render/shipmesh.js';
+
+    const params = new URLSearchParams(location.search);
+    const seedBase = Number(params.get('seed') || 1337);
+
+    const canvas = document.getElementById('game-canvas');
+    const engine = new Engine(canvas);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+    const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.05, 1e6);
+
+    // --- procedural environment (studio sheen for metals; no external assets)
+    {
+      const envScene = new THREE.Scene();
+      const top = new THREE.Mesh(
+        new THREE.PlaneGeometry(20, 20),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(0.9, 0.88, 0.8), side: THREE.DoubleSide })
+      );
+      top.position.y = 8; top.rotation.x = Math.PI / 2;
+      envScene.add(top);
+      const warm = new THREE.Mesh(
+        new THREE.PlaneGeometry(10, 14),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(0.7, 0.45, 0.28), side: THREE.DoubleSide })
+      );
+      warm.position.set(9, 2, -4); warm.rotation.y = -Math.PI / 2.4;
+      envScene.add(warm);
+      const cool = new THREE.Mesh(
+        new THREE.PlaneGeometry(12, 12),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(0.2, 0.42, 0.62), side: THREE.DoubleSide })
+      );
+      cool.position.set(-9, 1, 3); cool.rotation.y = Math.PI / 2.6;
+      envScene.add(cool);
+      envScene.add(new THREE.Mesh(
+        new THREE.SphereGeometry(30, 16, 12),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(0.02, 0.03, 0.045), side: THREE.BackSide })
+      ));
+      const pmrem = new THREE.PMREMGenerator(engine.renderer);
+      scene.environment = pmrem.fromScene(envScene, 0.12).texture;
+      pmrem.dispose();
+    }
+
+    // --- lights: warm key, cyan rim, warm kicker, faint fill --------------------
+    const key = new THREE.DirectionalLight(new THREE.Color(1.0, 0.92, 0.8), 4.6);
+    key.position.set(5, 8, 8);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.left = -8; key.shadow.camera.right = 8;
+    key.shadow.camera.top = 6; key.shadow.camera.bottom = -6;
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(new THREE.Color(0.45, 0.8, 1.0), 3.2);
+    rim.position.set(-7, 3, -9);
+    scene.add(rim);
+    const kicker = new THREE.DirectionalLight(new THREE.Color(1.0, 0.55, 0.3), 1.6);
+    kicker.position.set(8, 2, -5);
+    scene.add(kicker);
+    const under = new THREE.DirectionalLight(new THREE.Color(0.5, 0.35, 0.6), 0.7);
+    under.position.set(0, -6, 4);
+    scene.add(under);
+    scene.add(new THREE.HemisphereLight(0x2a3648, 0x0a0910, 0.65));
+    engine.setExposure(1.15);
+
+    // --- the lineup: all five classes, vanta hero center -----------------------
+    const classes = ['dray', 'talon', 'vanta', 'swift', 'prospect'];
+    const ships = [];
+    const seeds = [3, 41, 7, 12, 25];
+    classes.forEach((cls, i) => {
+      const ship = buildShip(seedBase + seeds[i] * 101, cls);
+      const k = i - 2;
+      ship.group.position.set(k * 2.25, 0.1 * Math.abs(k), -Math.abs(k) * 1.35 + (k === 0 ? 0.9 : 0));
+      ship.group.rotation.y = 2.62 + k * 0.07; // noses toward camera, 3/4 view
+      for (const g of ship.engineGlows) g.material.emissiveIntensity = 4.2;
+      scene.add(ship.group);
+      ships.push(ship);
+    });
+
+    // --- station looming behind, ring tilted toward camera ----------------------
+    const station = buildStation(seedBase + 9, 'meridian');
+    station.group.position.set(2, 13, -95);
+    station.group.rotation.set(0.42, -0.35, -0.05);
+    scene.add(station.group);
+
+    // --- camera: slight angle, ship-select framing ------------------------------
+    camera.fov = 42;
+    camera.updateProjectionMatrix();
+    camera.position.set(0.4, 1.5, 6.4);
+    camera.lookAt(0, 0.85, -3);
+
+    let ready = false;
+    function frame() {
+      const dt = engine.tick();
+      station.update(dt);
+      engine.render();
+      if (!ready) { ready = true; window.__AMS__ = { ready: true }; }
+      requestAnimationFrame(frame);
+    }
+    engine.setScene(scene, camera, { bloomStrength: 0.55, bloomRadius: 0.6, bloomThreshold: 0.85 });
+    frame();
+  </script>
+</body>
+</html>

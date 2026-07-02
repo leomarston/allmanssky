@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>flora + props test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'></svg>">
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #game-canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { RNG, hash32, hashString } from '/src/core/rng.js';
+    import { SimplexNoise } from '/src/core/noise.js';
+    import { FloraSystem } from '/src/render/flora.js';
+    import {
+      createRuin, createBeacon, createOutpost, createCrashedShip,
+      createResourceNode, createLandingPad,
+    } from '/src/render/props.js';
+
+    const params = new URLSearchParams(location.search);
+    const biome = params.get('biome') || 'lush';
+    const seed = Number(params.get('seed') || 42);
+
+    // ---- mock PlanetDef palettes per biome (contract shape) ----------------
+    const PALETTES = {
+      lush:      { deepWater:'#123a5e', shallowWater:'#2c6f8a', shore:'#c9b98c', low:'#3f7f3a', mid:'#7a9a4f', high:'#cfd8cc', peak:'#f4f8f8', cliff:'#6b6257', accent:'#59b552', glow:'#7de8ff' },
+      swamp:     { deepWater:'#14251c', shallowWater:'#2c4a34', shore:'#5f6b4a', low:'#33502e', mid:'#4f6b3a', high:'#8a9a7a', peak:'#c8d4be', cliff:'#4a4a3f', accent:'#7ab04a', glow:'#a4ff7d' },
+      desert:    { deepWater:'#28506e', shallowWater:'#4a7f96', shore:'#e8cf9a', low:'#c9a25f', mid:'#b0853f', high:'#e6d3a8', peak:'#f6ecd4', cliff:'#8a5f3a', accent:'#d98a3a', glow:'#ffd04a' },
+      frozen:    { deepWater:'#10304e', shallowWater:'#2c5e7e', shore:'#c8d8e4', low:'#b8ccd8', mid:'#d8e6ee', high:'#eef4f8', peak:'#ffffff', cliff:'#5a6b7a', accent:'#7ab8c8', glow:'#7de8ff' },
+      volcanic:  { deepWater:'#301418', shallowWater:'#5e2c1c', shore:'#4a3430', low:'#3f302c', mid:'#55403a', high:'#7a6258', peak:'#a89890', cliff:'#2a2220', accent:'#ff6a2a', glow:'#ff8c3a' },
+      toxic:     { deepWater:'#1c3020', shallowWater:'#3a5e2c', shore:'#7a8a4a', low:'#55703a', mid:'#6f8a44', high:'#a0b070', peak:'#d0dcb0', cliff:'#4f5a3f', accent:'#a0d44a', glow:'#a4ff5f' },
+      irradiated:{ deepWater:'#24301c', shallowWater:'#4a5e2c', shore:'#8a8a5a', low:'#5f6b3f', mid:'#7a854a', high:'#a8b088', peak:'#d4dcc0', cliff:'#55503a', accent:'#8fd44a', glow:'#7dff8a' },
+      ocean:     { deepWater:'#0e3358', shallowWater:'#2a7f9e', shore:'#e8d8a8', low:'#7aa05a', mid:'#94b46a', high:'#cfd8b8', peak:'#f4f8ec', cliff:'#6f6252', accent:'#5fc86a', glow:'#7de8ff' },
+      crystal:   { deepWater:'#1c1440', shallowWater:'#3c2c6e', shore:'#8a7ab0', low:'#5f558a', mid:'#7a6fa4', high:'#b0a8d0', peak:'#e4e0f4', cliff:'#3f3a5e', accent:'#b48cff', glow:'#9d7bff' },
+      barren:    { deepWater:'#28282e', shallowWater:'#4a4a52', shore:'#9a9088', low:'#7a7068', mid:'#948a80', high:'#c0b8b0', peak:'#e4e0dc', cliff:'#55504a', accent:'#a89078', glow:'#9adcff' },
+      exotic:    { deepWater:'#301c48', shallowWater:'#5e3a7e', shore:'#c8a0d8', low:'#8a5fa4', mid:'#a87ac0', high:'#d4b8e4', peak:'#f4ecfc', cliff:'#4f3a6e', accent:'#ff7dd8', glow:'#ff6fd8' },
+    };
+    const def = {
+      id: 'test-planet', seed, name: 'Verdana', biome,
+      floraDensity: biome === 'barren' ? 0.35 : 0.92,
+      seaLevel: 0.2,
+      palette: PALETTES[biome] || PALETTES.lush,
+      resources: ['carbyne', 'ferrox', 'oxylite'],
+    };
+
+    // ---- mock TerrainField (contract shape) --------------------------------
+    class MockField {
+      constructor(s) {
+        this.seed = s;
+        this.n = new SimplexNoise(s);
+        this.m = new SimplexNoise(s ^ 0x5f5f);
+      }
+      height(x, z) {
+        let h = 7.5 * this.n.fbm2(x * 0.006, z * 0.006, 4);
+        h += 2.0 * this.n.fbm2(x * 0.03, z * 0.03, 3);
+        h += 0.3 * this.n.noise2D(x * 0.12, z * 0.12);
+        return h;
+      }
+      normal(x, z, eps = 1) {
+        return new THREE.Vector3(
+          this.height(x - eps, z) - this.height(x + eps, z), 2 * eps,
+          this.height(x, z - eps) - this.height(x, z + eps)).normalize();
+      }
+      get seaY() { return -3.4; }
+      moisture(x, z) { return 0.5 + 0.5 * this.m.fbm2(x * 0.004 + 9, z * 0.004 - 5, 3); }
+      cellRng(cx, cz, salt) { return new RNG(hash32(this.seed, cx | 0, cz | 0, hashString(String(salt)))); }
+    }
+    const field = new MockField(seed);
+
+    // ---- scene / engine ----------------------------------------------------
+    const canvas = document.getElementById('game-canvas');
+    const engine = new Engine(canvas);
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x4a3c50, 110, 560);
+    const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 8000);
+    camera.position.set(0, 7.2, 40);
+    camera.lookAt(0, 4.2, -30);
+
+    // ---- lighting: low warm sun + cool sky fill ----------------------------
+    const sunDir = new THREE.Vector3(-0.72, 0.3, -0.42).normalize();
+    const sun = new THREE.DirectionalLight(0xffc07a, 2.7);
+    sun.position.copy(sunDir).multiplyScalar(300);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -110; sun.shadow.camera.right = 110;
+    sun.shadow.camera.top = 110; sun.shadow.camera.bottom = -110;
+    sun.shadow.camera.near = 60; sun.shadow.camera.far = 620;
+    sun.shadow.bias = -0.0012;
+    scene.add(sun, sun.target);
+    sun.target.position.set(0, 0, -20);
+    scene.add(new THREE.HemisphereLight(0x3a5088, 0x2c3626, 0.6));
+
+    // ---- gradient dusk sky dome with HDR sun halo --------------------------
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false, fog: false,
+      uniforms: { sunDir: { value: sunDir } },
+      vertexShader: `varying vec3 vDir;
+        void main() { vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `varying vec3 vDir; uniform vec3 sunDir;
+        void main() {
+          float h = clamp(vDir.y * 1.25, 0.0, 1.0);
+          vec3 hor = vec3(0.78, 0.42, 0.26);
+          vec3 zen = vec3(0.055, 0.09, 0.20);
+          vec3 col = mix(hor, zen, pow(h, 0.58));
+          float sd = max(dot(vDir, sunDir), 0.0);
+          col += vec3(1.0, 0.5, 0.22) * pow(sd, 5.0) * 0.5;
+          col += vec3(2.6, 1.6, 0.85) * pow(sd, 300.0) * 2.4;
+          gl_FragColor = vec4(col, 1.0);
+        }`,
+    });
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(3200, 24, 16), skyMat));
+
+    // ---- ground mesh sampled from the mock field ---------------------------
+    const SIZE = 640, SEG = 156;
+    const gGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+    gGeo.rotateX(-Math.PI / 2);
+    const gp = gGeo.attributes.position;
+    const gCol = new Float32Array(gp.count * 3);
+    const pal = {}; for (const k in def.palette) pal[k] = new THREE.Color(def.palette[k]);
+    const c = new THREE.Color();
+    for (let i = 0; i < gp.count; i++) {
+      const x = gp.getX(i), z = gp.getZ(i);
+      const y = field.height(x, z);
+      gp.setY(i, y);
+      const nrm = field.normal(x, z);
+      const moist = field.moisture(x, z);
+      const t = THREE.MathUtils.clamp((y + 3) / 12, 0, 1);
+      c.copy(pal.low).lerp(pal.mid, t);
+      c.lerp(pal.shore, THREE.MathUtils.clamp((1 - moist) * 0.55, 0, 1) * 0.5);
+      if (y < field.seaY + 0.8) c.copy(pal.shore);
+      if (nrm.y < 0.82) c.lerp(pal.cliff, THREE.MathUtils.clamp((0.82 - nrm.y) * 6, 0, 1));
+      gCol[i * 3] = c.r; gCol[i * 3 + 1] = c.g; gCol[i * 3 + 2] = c.b;
+    }
+    gGeo.setAttribute('color', new THREE.BufferAttribute(gCol, 3));
+    gGeo.computeVertexNormals();
+    const ground = new THREE.Mesh(gGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 }));
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // water plane
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE),
+      new THREE.MeshStandardMaterial({ color: pal.deepWater, transparent: true, opacity: 0.86, roughness: 0.18, metalness: 0.4 }));
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = field.seaY;
+    scene.add(water);
+
+    // ---- THE MODULE: flora system ------------------------------------------
+    const flora = new FloraSystem(scene, def, field);
+    const focus = new THREE.Vector3(0, 0, -8);
+
+    // ---- props in a semicircle facing the camera ---------------------------
+    const rngRoot = new RNG(hash32(seed, 777));
+    const faceCam = (obj, p) => { obj.rotation.y = Math.atan2(camera.position.x - p.x, camera.position.z - p.z); };
+    const placeProp = (built, x, z, face = true) => {
+      const y = field.height(x, z);
+      built.object3d.position.set(x, y, z);
+      if (face) faceCam(built.object3d, built.object3d.position);
+      scene.add(built.object3d);
+      return built;
+    };
+    placeProp(createBeacon(rngRoot.fork('beacon')), 1, -36);
+    placeProp(createRuin(rngRoot.fork('ruin')), -31, -27);
+    placeProp(createOutpost(rngRoot.fork('outpost'), 'meridian'), 27, -29);
+    placeProp(createLandingPad(rngRoot.fork('pad2')), 40, -18, false);
+    placeProp(createCrashedShip(rngRoot.fork('crash')), -19, -11);
+    placeProp(createLandingPad(rngRoot.fork('pad')), 15, -7, false);
+    placeProp(createResourceNode('oxylite', rngRoot.fork('n1')), -6.5, -4.5);
+    placeProp(createResourceNode('voltglass', rngRoot.fork('n2')), 8, -17);
+    placeProp(createResourceNode('aurium', rngRoot.fork('n3')), -13, -21);
+
+    // sanity: exercise the harvest contract once
+    const hit = flora.collectableAt ? (flora.update(0, focus), flora.collectableAt(focus, 60)) : null;
+    if (hit) { flora.removeInstance(hit.id); }
+
+    // ---- fireflies (transient VFX — Math.random is fine here) --------------
+    const FN = 110;
+    const fPos = new Float32Array(FN * 3);
+    const fSeed = new Float32Array(FN);
+    for (let i = 0; i < FN; i++) {
+      const x = (Math.random() - 0.5) * 120, z = -Math.random() * 70 + 15;
+      fPos[i * 3] = x; fPos[i * 3 + 1] = field.height(x, z) + 0.8 + Math.random() * 2.6; fPos[i * 3 + 2] = z;
+      fSeed[i] = Math.random() * 10;
+    }
+    const fGeo = new THREE.BufferGeometry();
+    fGeo.setAttribute('position', new THREE.BufferAttribute(fPos, 3));
+    const fMat = new THREE.PointsMaterial({
+      color: new THREE.Color(0.9, 1.6, 1.1), size: 0.22, sizeAttenuation: true,
+      transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    scene.add(new THREE.Points(fGeo, fMat));
+
+    // ---- loop ---------------------------------------------------------------
+    engine.setScene(scene, camera, { bloomStrength: 0.6, bloomRadius: 0.55, bloomThreshold: 0.85 });
+    engine.setExposure(1.05);
+
+    let t = 0, ready = false;
+    function frame() {
+      const dt = engine.tick();
+      t += dt;
+      flora.update(dt, focus);
+      const p = fGeo.attributes.position;
+      for (let i = 0; i < FN; i++) {
+        p.setY(i, p.getY(i) + Math.sin(t * 1.4 + fSeed[i]) * 0.004);
+        p.setX(i, p.getX(i) + Math.cos(t * 0.7 + fSeed[i] * 2.1) * 0.006);
+      }
+      p.needsUpdate = true;
+      engine.render();
+      if (!ready) { ready = true; window.__AMS__ = { ready: true }; }
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

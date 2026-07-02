@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>sun + effects test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'></svg>">
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #game-canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { RNG } from '/src/core/rng.js';
+    import { SimplexNoise } from '/src/core/noise.js';
+    import { createSun } from '/src/render/sun.js';
+    import { EffectsSystem } from '/src/render/effects.js';
+
+    const params = new URLSearchParams(location.search);
+    const starClass = params.get('class') || 'G';
+    const warpLevel = Number(params.get('warp') || 0);
+
+    const canvas = document.getElementById('game-canvas');
+    const engine = new Engine(canvas);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+    const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 1e7);
+    camera.position.set(0, 6, 55);
+    camera.lookAt(-10, 4, -30);
+
+    // --- mock backdrop starfield (starfield module is another author's) -----
+    const rng = new RNG(1337);
+    const N = 3500;
+    const sp = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const v = new THREE.Vector3(rng.gaussian(), rng.gaussian(), rng.gaussian()).normalize().multiplyScalar(4000);
+      sp.set([v.x, v.y, v.z], i * 3);
+    }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.BufferAttribute(sp, 3));
+    scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color: 0xbfcfe8, size: 1.5, sizeAttenuation: false })));
+
+    // --- the sun (StarSystem.star contract shape) ----------------------------
+    const star = { class: starClass, colorHex: 0xffd27a, radius: 26, temperature: 5700 };
+    if (starClass !== 'G') delete star.colorHex; // let class fallback drive tint
+    const sun = createSun(star);
+    sun.object3d.position.set(-108, 26, -248);
+    scene.add(sun.object3d);
+    scene.add(sun.light);
+    // dim fill so backlit props read (space state adds its own ambience)
+    scene.add(new THREE.AmbientLight(0x38465a, 1.6));
+    scene.add(new THREE.HemisphereLight(0x2a3d55, 0x120d0a, 1.2));
+
+    // --- asteroid target for beam / sparks / bolts ---------------------------
+    const noise = new SimplexNoise(7);
+    const rockGeo = new THREE.IcosahedronGeometry(6, 3);
+    const rp = rockGeo.attributes.position;
+    for (let i = 0; i < rp.count; i++) {
+      const x = rp.getX(i), y = rp.getY(i), z = rp.getZ(i);
+      const d = 1 + 0.28 * noise.fbm3(x * 0.18, y * 0.18, z * 0.18, 4);
+      rp.setXYZ(i, x * d, y * d, z * d);
+    }
+    rockGeo.computeVertexNormals();
+    const rock = new THREE.Mesh(rockGeo, new THREE.MeshStandardMaterial({ color: 0x8a7f74, roughness: 0.95, metalness: 0.05 }));
+    rock.position.set(30, -4, -12);
+    scene.add(rock);
+
+    // --- little mining skiff (mock ship, static) ------------------------------
+    const skiff = new THREE.Mesh(
+      new THREE.ConeGeometry(1.2, 4, 6),
+      new THREE.MeshStandardMaterial({ color: 0x39424e, roughness: 0.6, metalness: 0.4 })
+    );
+    skiff.position.set(8, 9, 6);
+    skiff.rotation.z = -1.2;
+    scene.add(skiff);
+
+    // --- effects ---------------------------------------------------------------
+    const fx = new EffectsSystem(scene);
+
+    // circling fighter proxy with engine trail
+    const fighter = new THREE.Mesh(
+      new THREE.ConeGeometry(0.8, 3, 6),
+      new THREE.MeshStandardMaterial({ color: 0x2b333d, roughness: 0.6, metalness: 0.4 })
+    );
+    scene.add(fighter);
+    const trail = fx.engineTrail(fighter, 0x7de8ff);
+    trail.setLevel(1);
+
+    // constant mining beam from skiff nose to the rock
+    const beamFrom = new THREE.Vector3();
+    const beamTo = new THREE.Vector3();
+    const beam = fx.miningBeam(
+      beamFrom.set(8.8, 7.4, 6.8),
+      beamTo.set(26.5, -1.5, -8.5),
+      0xffca6b
+    );
+
+    // warp tunnel handle exists (level from URL for visual checks)
+    const warp = fx.warpTunnel(camera);
+    warp.setLevel(warpLevel);
+
+    // periodic landing dust to exercise the path (low, right of frame)
+    const dustPos = new THREE.Vector3(34, -14, -30);
+    fx.landingDust(dustPos);
+    let dustT = 2.4;
+
+    const rockNormal = new THREE.Vector3(-0.7, 0.5, 0.6).normalize();
+    const boltFrom = new THREE.Vector3();
+    const boltDir = new THREE.Vector3();
+    const expPos = new THREE.Vector3();
+    const expRng = new RNG(99);
+
+    let t = 0, expT = 0.35, sparkT = 0.15, boltT = 0.1;
+    let ready = false;
+
+    function frame() {
+      const dt = engine.tick();
+      t += dt;
+
+      // fighter arc across the dark right of frame
+      const a = t * 0.9 + 2.2;
+      fighter.position.set(20 + Math.cos(a) * 16, 8 + Math.sin(a * 1.7) * 4, -16 + Math.sin(a) * 14);
+      fighter.rotation.set(0, -a, Math.PI / 2 + 0.3 * Math.sin(a));
+
+      // demo loop timers
+      expT -= dt;
+      if (expT <= 0) {
+        expT = 1.05;
+        expPos.set(expRng.range(4, 36), expRng.range(-6, 10), expRng.range(-30, -4));
+        fx.explosion(expPos, expRng.range(0.8, 1.6), expRng.chance(0.35) ? 0x7de8ff : 0xff9448);
+      }
+      sparkT -= dt;
+      if (sparkT <= 0) {
+        sparkT = 0.55;
+        fx.sparks(new THREE.Vector3(26.5, -1.5, -8.5), rockNormal, 0xffca6b);
+      }
+      dustT -= dt;
+      if (dustT <= 0) { dustT = 3.1; fx.landingDust(dustPos); }
+      boltT -= dt;
+      if (boltT <= 0) {
+        boltT = 0.42;
+        boltFrom.set(58 + Math.random() * 4, -30, -18);
+        boltDir.copy(rock.position).sub(boltFrom).normalize();
+        boltDir.x += (Math.random() - 0.5) * 0.06;
+        boltDir.y += (Math.random() - 0.5) * 0.06;
+        fx.laserBolt(boltFrom, boltDir.normalize(), 26, 0xff5470);
+      }
+
+      // wobble the beam impact point
+      beamTo.set(26.5 + Math.sin(t * 2.1) * 1.4, -1.5 + Math.cos(t * 1.7) * 1.2, -8.5);
+      beam.set(beamFrom, beamTo);
+
+      sun.update(dt, camera.position);
+      fx.update(dt);
+      engine.render();
+
+      if (!ready) { ready = true; window.__AMS__ = { ready: true }; }
+      requestAnimationFrame(frame);
+    }
+
+    engine.setScene(scene, camera, { bloomStrength: 0.55, bloomRadius: 0.6, bloomThreshold: 0.85 });
+    frame();
+  </script>
+</body>
+</html>

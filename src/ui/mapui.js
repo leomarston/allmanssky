@@ -21,7 +21,7 @@ export class GalaxyMap {
       const vesper = this.gs.quests.vesperTarget === n.id;
       return `<button data-id="${n.id}" style="display:block;width:100%;text-align:left;margin:3px 0;background:#0b1626;border:1px solid ${vesper ? '#ffb454' : '#7de8ff44'};color:#cfeeff;padding:8px 12px;cursor:pointer;font-family:inherit;">
         <span style="color:${n.starColorHex ?? '#fff'};">●</span> ${n.name}
-        <span style="opacity:.6">· ${n.starClass}-class · ${n.pos.distanceTo?.(current ? this.galaxy.getSystem(this.gs.currentSystemId) && n.pos : n.pos)?.toFixed?.(1) ?? '?'} </span>
+        <span style="opacity:.6">· ${n.starClass}-class</span>
         ${visited ? '<span style="color:#7dffb4;font-size:11px;"> VISITED</span>' : ''}
         ${vesper ? '<span style="color:#ffb454;font-size:11px;"> ⟡ VESPER SIGNAL</span>' : ''}
       </button>`;

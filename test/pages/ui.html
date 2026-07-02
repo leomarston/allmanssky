@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ui — HUD + notifications test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128421;</text></svg>">
+  <link rel="stylesheet" href="/src/ui/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <canvas id="game-canvas"></canvas>
+    <div id="ui-root"></div>
+  </div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { events } from '/src/core/events.js';
+    import { createStarfield } from '/src/render/starfield.js';
+    import { createNebulaField } from '/src/render/nebula.js';
+    import { HUD } from '/src/ui/hud.js';
+    import * as notifications from '/src/ui/notifications.js';
+
+    // ---- backdrop: space vista (starfield + nebula + rim-lit planet) --------
+    const canvas = document.getElementById('game-canvas');
+    const engine = new Engine(canvas);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 4e6);
+
+    const SEED = 1337;
+    const starfield = createStarfield(SEED);
+    scene.add(starfield.object3d);
+    const nebulae = createNebulaField(SEED);
+    scene.add(nebulae.object3d);
+
+    const cluster = nebulae.object3d.children.find((c) => c.userData.isCluster);
+    camera.lookAt(cluster.getWorldPosition(new THREE.Vector3()));
+    camera.rotateY(-0.28);
+    camera.rotateX(0.08);
+
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+    const planetPos = fwd.clone().multiplyScalar(340)
+      .addScaledVector(right, 120).addScaledVector(up, -110);
+    const planet = new THREE.Mesh(
+      new THREE.SphereGeometry(80, 64, 64),
+      new THREE.MeshStandardMaterial({ color: 0x36414d, roughness: 0.92, metalness: 0.04 })
+    );
+    planet.position.copy(planetPos);
+    scene.add(planet);
+    const rim = new THREE.DirectionalLight(0xbfd8ff, 14.0);
+    rim.position.copy(planetPos).addScaledVector(right, -350).addScaledVector(up, 220).addScaledVector(fwd, 300);
+    rim.target.position.copy(planetPos);
+    scene.add(rim, rim.target);
+    scene.add(new THREE.AmbientLight(0x223044, 0.12));
+
+    engine.setScene(scene, camera, { bloomStrength: 0.8, bloomRadius: 0.7, bloomThreshold: 0.85 });
+    engine.setExposure(1.1);
+
+    // ---- UI under test -------------------------------------------------------
+    const uiRoot = document.getElementById('ui-root');
+    const hud = new HUD(uiRoot);
+    hud.setMode('foot');
+    // long durations freeze toasts/banner for the screenshot
+    notifications.init(uiRoot, { toastMs: 600000, bannerMs: 600000 });
+
+    events.emit('notify', { text: 'Oxylite refined — oxygen restored', tone: 'good', icon: 'o2' });
+    events.emit('notify', { text: 'Storm front approaching — seek shelter', tone: 'warn', icon: 'hazard' });
+    events.emit('discovery:new', { kind: 'ruin', name: 'Halcyon Vault', value: 1200 });
+
+    const snapshot = {
+      health: 0.78,
+      shield: 0.55,
+      oxygen: 0.62,
+      energy: 0.21,          // low → red pulse
+      jetpack: 0.85,
+      lumens: 12470,
+      speed: 24,
+      altitude: 63,
+      fuel: 0.74,
+      warpCharges: 2,
+      hazardIcons: ['temp', 'rad'],
+      compassDeg: 38,
+      target: { name: 'Luminel Beacon', dist: 214, bearingDeg: 74 },
+      reticle: 'interact',
+      interactLabel: 'F — Attune Luminel Beacon',
+      locationLine: 'VELL CRESSIDA · THUNDER',
+      toolMode: 'scanner',
+    };
+
+    let t = 0;
+    let ready = false;
+    function frame() {
+      const dt = engine.tick();
+      t += dt;
+      starfield.update(dt, camera.quaternion);
+      nebulae.update(dt);
+      snapshot.compassDeg = 38 + Math.sin(t * 0.3) * 6; // gentle sway
+      hud.update(dt, snapshot);
+      engine.render();
+      if (!ready) { ready = true; window.__AMS__ = { ready: true }; }
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

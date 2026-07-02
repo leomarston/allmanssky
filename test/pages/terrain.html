@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>terrain — surface + sky test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127956;</text></svg>">
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #game-canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { TerrainField } from '/src/universe/terrainfield.js';
+    import { TerrainRenderer } from '/src/render/terrain.js';
+    import { SkyDome } from '/src/render/sky.js';
+
+    // Contract-exact lush PlanetDef (mocking what universe/biomes.js provides)
+    const planetDef = {
+      id: 'test:verdance', seed: 90210, name: 'Verdance', biome: 'lush',
+      radius: 64, orbitRadius: 3200, orbitPhase: 0.7, orbitSpeed: 0.02,
+      axialTilt: 0.21, dayLength: 720, gravity: 1.0,
+      seaLevel: 0.34,
+      atmosphere: { density: 0.62, colorHex: '#8fd0ff', skyColorHex: '#4a86d8', fogColorHex: '#bcd6e8' },
+      clouds: { coverage: 0.4, colorHex: '#ffffff' },
+      rings: null,
+      hazard: { heat: 0, cold: 0, toxic: 0, rad: 0 },
+      weather: 'clear',
+      palette: {
+        deepWater: '#0d3b55', shallowWater: '#2f9db4', shore: '#d8c894',
+        low: '#5fa84e', mid: '#3e7c3c', high: '#8b7d60', peak: '#e9edf3',
+        cliff: '#6d6157', accent: '#ff7ac8', glow: '#8dffc0',
+      },
+      resources: ['ferrox', 'carbyne', 'chlorophane', 'oxylite'],
+      floraDensity: 0.8, faunaDensity: 0.5, crystalDensity: 0.1,
+      hasRuins: true, hasOutpost: false,
+      terrain: { relief: 0.62, roughness: 0.55, warp: 0.55, plateau: 0.12, crater: 0, canyon: 0.18 },
+    };
+
+    const SUN_ELEVATION = 0.35; // late afternoon
+
+    const canvas = document.getElementById('game-canvas');
+    const engine = new Engine(canvas);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 9000);
+
+    const field = new TerrainField(planetDef);
+    const sky = new SkyDome(scene, planetDef);
+    sky.update(0, SUN_ELEVATION, new THREE.Vector3());
+    const terrain = new TerrainRenderer(scene, planetDef, field);
+
+    // --- composition search: stand on land, sea in the midground, mountains far,
+    //     looking ~30° off the sun azimuth for warm side light
+    const seaY = field.seaY;
+    const sunAz = Math.atan2(sky.sunDir.z, sky.sunDir.x);
+    const heading = sunAz + 0.52;
+    const fwd = new THREE.Vector3(Math.cos(heading), 0, Math.sin(heading));
+    let best = { x: 0, z: 0, h: field.height(0, 0), score: -1 };
+    for (let gz = -1400; gz <= 1400; gz += 80) {
+      for (let gx = -1400; gx <= 1400; gx += 80) {
+        const h0 = field.height(gx, gz);
+        if (h0 < seaY + 5 || h0 > seaY + 42) continue;
+        let score = 0;
+        for (let s = 1; s <= 14; s++) {
+          const d = 60 + s * 42;
+          for (let l = -1; l <= 1; l++) {
+            const px = gx + fwd.x * d - fwd.z * l * d * 0.38;
+            const pz = gz + fwd.z * d + fwd.x * l * d * 0.38;
+            const h = field.height(px, pz);
+            if (h < seaY && d > 120 && d < 480) score += 1.6;
+            if (h > seaY + 52 && d > 320) score += 1.0;
+          }
+        }
+        if (field.height(gx + fwd.x * 70, gz + fwd.z * 70) > seaY + 2) score += 2;
+        if (score > best.score) best = { x: gx, z: gz, h: h0, score };
+      }
+    }
+
+    camera.position.set(best.x, Math.max(best.h, seaY) + 35, best.z);
+    const lookAt = camera.position.clone().addScaledVector(fwd, 300);
+    lookAt.y = camera.position.y - 55;
+    camera.lookAt(lookAt);
+
+    // --- emissive marker spheres for bloom interest
+    const glowCol = new THREE.Color(planetDef.palette.glow).multiplyScalar(2.6);
+    const accentCol = new THREE.Color(planetDef.palette.accent).multiplyScalar(2.4);
+    const markerGeo = new THREE.SphereGeometry(1, 16, 12);
+    const markers = [
+      { d: 36, lat: -0.55, r: 0.8, col: glowCol },
+      { d: 62, lat: 0.4, r: 1.0, col: accentCol },
+      { d: 95, lat: -0.15, r: 1.2, col: glowCol },
+      { d: 150, lat: 0.6, r: 1.6, col: glowCol },
+      { d: 230, lat: -0.35, r: 2.2, col: accentCol },
+    ];
+    for (const m of markers) {
+      const mx = best.x + fwd.x * m.d - fwd.z * m.lat * m.d;
+      const mz = best.z + fwd.z * m.d + fwd.x * m.lat * m.d;
+      const my = Math.max(field.height(mx, mz), seaY) + m.r + 0.4;
+      const mesh = new THREE.Mesh(markerGeo, new THREE.MeshBasicMaterial({ color: m.col }));
+      mesh.scale.setScalar(m.r);
+      mesh.position.set(mx, my, mz);
+      scene.add(mesh);
+    }
+
+    engine.setScene(scene, camera, { bloomStrength: 0.5, bloomRadius: 0.7, bloomThreshold: 0.85 });
+    engine.setExposure(1.05);
+
+    let t = 0, frames = 0;
+    const baseQuat = camera.quaternion.clone();
+    const sway = new THREE.Quaternion();
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    function frame() {
+      const dt = engine.tick();
+      t += dt;
+      sky.update(dt, SUN_ELEVATION, camera.position);
+      terrain.update(dt, camera.position, sky.sunDir);
+      // subtle cinematic sway
+      sway.setFromAxisAngle(yAxis, Math.sin(t * 0.07) * 0.02);
+      camera.quaternion.copy(sway).multiply(baseQuat);
+      engine.render();
+      frames++;
+      if (frames === 1) window.__AMS__ = { ready: true };
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

@@ -83,7 +83,9 @@ export class SurfaceState {
     this.builder = new BaseBuilder(this.scene, this.field, gs, this.systemId, this.planetIndex);
 
     // day cycle: deterministic phase per planet, advances in real time
-    this.timeOfDay = ((this.def.seed % 1000) / 1000 + 0.28) % 1; // start daylit
+    this.timeOfDay = ((this.def.seed % 1000) / 1000 + 0.28) % 1;
+    const todOverride = new URLSearchParams(location.search).get('tod');
+    if (todOverride != null) this.timeOfDay = Number(todOverride); // debug/test hook
     this._elapsed = 0;
     this._landedFresh = params.landingPos != null;
 

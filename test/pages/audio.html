@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>audio — synth sfx + generative music test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127925;</text></svg>">
+  <style>
+    :root {
+      --ui-cyan: #7de8ff;
+      --ui-amber: #ffb454;
+      --ui-red: #ff5470;
+      --ui-green: #7dffb4;
+    }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #02060a; overflow: hidden; }
+    #game-canvas { display: block; width: 100vw; height: 100vh; position: fixed; inset: 0; }
+    #ui { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      font-family: 'Segoe UI', system-ui, sans-serif; color: var(--ui-cyan); pointer-events: none; }
+    #panel { pointer-events: auto; width: 780px; max-width: 92vw; max-height: 92vh; overflow-y: auto;
+      background: rgba(8, 20, 28, 0.72); border: 1px solid rgba(125, 232, 255, 0.45);
+      border-radius: 6px; padding: 22px 26px 20px; backdrop-filter: blur(7px);
+      box-shadow: 0 0 40px rgba(125, 232, 255, 0.12), inset 0 0 60px rgba(125, 232, 255, 0.04); }
+    #panel::after { content: ''; position: fixed; inset: 0; pointer-events: none;
+      background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(125,232,255,0.02) 3px 4px); }
+    h1 { margin: 0; font-size: 17px; letter-spacing: 0.45em; font-weight: 300; text-transform: uppercase;
+      text-shadow: 0 0 12px rgba(125, 232, 255, 0.7); }
+    .sub { font-size: 9px; letter-spacing: 0.3em; text-transform: uppercase; opacity: 0.55; margin: 6px 0 16px; }
+    .label { font-size: 9px; letter-spacing: 0.35em; text-transform: uppercase; opacity: 0.7;
+      border-bottom: 1px solid rgba(125, 232, 255, 0.25); padding-bottom: 4px; margin: 14px 0 10px; }
+    .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 7px; }
+    button { font-family: inherit; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--ui-cyan); background: rgba(125, 232, 255, 0.06); border: 1px solid rgba(125, 232, 255, 0.4);
+      border-radius: 3px; padding: 8px 4px; cursor: pointer; transition: background 0.12s, box-shadow 0.12s; }
+    button:hover { background: rgba(125, 232, 255, 0.16); box-shadow: 0 0 14px rgba(125, 232, 255, 0.35); }
+    button.flash { background: rgba(125, 232, 255, 0.4); color: #04222c; box-shadow: 0 0 20px rgba(125, 232, 255, 0.8); }
+    button.on { background: rgba(125, 232, 255, 0.28); box-shadow: 0 0 16px rgba(125, 232, 255, 0.5); }
+    button.warn { color: var(--ui-amber); border-color: rgba(255, 180, 84, 0.45); }
+    button.warn:hover { background: rgba(255, 180, 84, 0.14); box-shadow: 0 0 14px rgba(255, 180, 84, 0.35); }
+    .row { display: flex; align-items: center; gap: 12px; }
+    .row .grid { flex: 1; }
+    .slider { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 9px;
+      letter-spacing: 0.25em; text-transform: uppercase; opacity: 0.9; }
+    input[type=range] { flex: 1; accent-color: var(--ui-cyan); height: 3px; }
+    .val { width: 36px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ui-amber); }
+    #status { font-size: 9px; letter-spacing: 0.25em; text-transform: uppercase; opacity: 0.5; margin-top: 14px; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <div id="ui">
+    <div id="panel">
+      <h1>AMS Audio Console</h1>
+      <div class="sub">wayfarer sound test &mdash; synthesized sfx &middot; generative ambient &middot; click anything to start audio</div>
+      <div class="label">SFX Bank</div>
+      <div class="grid" id="sfx-grid"></div>
+      <div class="label">Music Scene</div>
+      <div class="grid" id="scene-grid" style="grid-template-columns: repeat(7, 1fr);"></div>
+      <div class="slider"><span>Danger</span><input type="range" id="danger" min="0" max="1" step="0.01" value="0"><span class="val" id="danger-v">0.00</span></div>
+      <div class="label">Ship Engine</div>
+      <div class="slider"><span>Throttle</span><input type="range" id="throttle" min="0" max="1" step="0.01" value="0"><span class="val" id="throttle-v">0.00</span></div>
+      <div class="row" style="margin-top: 14px;">
+        <button id="mute" class="warn" style="width: 130px;">Mute: Off</button>
+        <div id="status">audio context: not started</div>
+      </div>
+    </div>
+  </div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { audio } from '/src/audio/audio.js';
+
+    // ---------------- THREE backdrop (procedural, inline mock visuals) ------
+    const canvas = document.getElementById('game-canvas');
+    const engine3d = new Engine(canvas);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 4000);
+    camera.position.set(0, 0, 60);
+
+    // star points
+    {
+      const N = 2600, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
+      const c = new THREE.Color();
+      for (let i = 0; i < N; i++) {
+        const r = 320 + Math.random() * 900;
+        const th = Math.random() * Math.PI * 2, ph = Math.acos(Math.random() * 2 - 1);
+        pos[i * 3] = r * Math.sin(ph) * Math.cos(th);
+        pos[i * 3 + 1] = r * Math.sin(ph) * Math.sin(th);
+        pos[i * 3 + 2] = r * Math.cos(ph);
+        const k = Math.random();
+        if (k < 0.68) c.setRGB(0.8, 0.9, 1.0);
+        else if (k < 0.88) c.setRGB(1.0, 0.85, 0.6);
+        else c.setRGB(0.55, 0.85, 1.0);
+        const b = 0.4 + Math.random() * 0.9;
+        col[i * 3] = c.r * b; col[i * 3 + 1] = c.g * b; col[i * 3 + 2] = c.b * b;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const stars = new THREE.Points(g, new THREE.PointsMaterial({
+        size: 1.6, sizeAttenuation: false, vertexColors: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+      }));
+      scene.add(stars);
+    }
+
+    // soft procedural nebula sprites for color depth (canvas radial gradients)
+    function nebulaSprite(r, g, b, x, y, z, s, opacity) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 256;
+      const c2 = cv.getContext('2d');
+      const grad = c2.createRadialGradient(128, 128, 8, 128, 128, 128);
+      grad.addColorStop(0, `rgba(${r},${g},${b},0.85)`);
+      grad.addColorStop(0.45, `rgba(${(r * 0.6) | 0},${(g * 0.6) | 0},${(b * 0.7) | 0},0.32)`);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      c2.fillStyle = grad;
+      c2.fillRect(0, 0, 256, 256);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: new THREE.CanvasTexture(cv), blending: THREE.AdditiveBlending,
+        transparent: true, opacity, depthWrite: false,
+      }));
+      sp.position.set(x, y, z);
+      sp.scale.setScalar(s);
+      scene.add(sp);
+      return sp;
+    }
+    nebulaSprite(58, 92, 150, -260, 130, -420, 480, 0.5);   // cold indigo, upper left
+    nebulaSprite(150, 70, 110, 240, -150, -520, 520, 0.35); // dim magenta, lower right
+    nebulaSprite(40, 120, 120, -80, -220, -480, 380, 0.3);  // teal floor wash
+
+    // glowing "resonator" core + rings, right of the panel
+    const core = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(6, 3),
+      new THREE.MeshStandardMaterial({ color: 0x0a1a22, roughness: 0.35, metalness: 0.2,
+        emissive: new THREE.Color(0.22, 1.25, 1.75), emissiveIntensity: 1 })
+    );
+    core.position.set(50, 10, -22);
+    scene.add(core);
+    const ringA = new THREE.Mesh(
+      new THREE.TorusGeometry(11.5, 0.26, 12, 96),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(1.9, 0.95, 0.32) })
+    );
+    ringA.position.copy(core.position); ringA.rotation.set(1.15, 0.4, 0);
+    scene.add(ringA);
+    const ringB = new THREE.Mesh(
+      new THREE.TorusGeometry(15.5, 0.17, 12, 96),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0.38, 1.5, 2.0) })
+    );
+    ringB.position.copy(core.position); ringB.rotation.set(-0.9, -0.55, 0.2);
+    scene.add(ringB);
+
+    // amber companion orb, low left
+    const ember = new THREE.Mesh(
+      new THREE.SphereGeometry(3.0, 32, 32),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 0.95, 0.25) })
+    );
+    ember.position.set(-54, -16, -30);
+    scene.add(ember);
+
+    // equalizer bars along the bottom (pure visual motif, sine-driven)
+    const BAR_N = 56;
+    const bars = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1.2, 1, 0.6),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.9, 2.5) }),
+      BAR_N
+    );
+    scene.add(bars);
+    const barM = new THREE.Matrix4(), barP = new THREE.Vector3(), barS = new THREE.Vector3();
+    const barQ = new THREE.Quaternion();
+
+    scene.add(new THREE.AmbientLight(0x18242e, 0.6));
+    const key = new THREE.DirectionalLight(0x9fd8ff, 2.2);
+    key.position.set(-30, 40, 50);
+    scene.add(key);
+
+    engine3d.setScene(scene, camera, { bloomStrength: 0.95, bloomRadius: 0.65, bloomThreshold: 0.85 });
+    engine3d.setExposure(1.1);
+
+    // ---------------- UI wiring --------------------------------------------
+    const SFX_NAMES = ['click','hover','confirm','deny','scan','scanDone','mine','mineHit',
+      'collect','craft','laser','boltHit','explosion','hurt','jetpack','land','takeoff',
+      'warp','dock','notify','discovery','death'];
+    const status = document.getElementById('status');
+    const started = () => { status.textContent = 'audio context: running'; };
+
+    const sfxGrid = document.getElementById('sfx-grid');
+    for (const name of SFX_NAMES) {
+      const b = document.createElement('button');
+      b.textContent = name;
+      b.addEventListener('click', () => {
+        audio.init(); started();
+        audio.sfx(name);
+        b.classList.add('flash');
+        setTimeout(() => b.classList.remove('flash'), 180);
+      });
+      sfxGrid.appendChild(b);
+    }
+
+    const SCENES = [
+      ['menu', 'menu', {}],
+      ['space', 'space', {}],
+      ['lush', 'surface', { biome: 'lush' }],
+      ['frozen', 'surface', { biome: 'frozen' }],
+      ['volcanic', 'surface', { biome: 'volcanic' }],
+      ['toxic', 'surface', { biome: 'toxic' }],
+      ['exotic', 'surface', { biome: 'exotic' }],
+    ];
+    let currentScene = null;
+    const danger = document.getElementById('danger');
+    const dangerV = document.getElementById('danger-v');
+    const sceneGrid = document.getElementById('scene-grid');
+    const sceneBtns = [];
+    for (const [label, kind, mood] of SCENES) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        audio.init(); started();
+        currentScene = [kind, mood];
+        audio.setScene(kind, { ...mood, danger: Number(danger.value) });
+        sceneBtns.forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+      });
+      sceneBtns.push(b);
+      sceneGrid.appendChild(b);
+    }
+    danger.addEventListener('input', () => {
+      dangerV.textContent = Number(danger.value).toFixed(2);
+      if (currentScene) audio.setScene(currentScene[0], { ...currentScene[1], danger: Number(danger.value) });
+    });
+
+    const throttle = document.getElementById('throttle');
+    const throttleV = document.getElementById('throttle-v');
+    throttle.addEventListener('input', () => {
+      audio.init(); started();
+      throttleV.textContent = Number(throttle.value).toFixed(2);
+      audio.engine(Number(throttle.value));
+    });
+
+    const muteBtn = document.getElementById('mute');
+    muteBtn.addEventListener('click', () => {
+      audio.init(); started();
+      audio.setMuted(!audio.muted);
+      muteBtn.textContent = 'Mute: ' + (audio.muted ? 'On' : 'Off');
+    });
+
+    // ---------------- headless self-test ------------------------------------
+    // Plays 5 key sfx + starts the space scene against a (likely suspended /
+    // muted) context — verifies the whole synthesis path throws nothing.
+    window.__AMS_AUDIO_TEST__ = async () => {
+      audio.init();
+      const wasMuted = audio.muted;
+      audio.setMuted(true); // muted context check — never blast speakers
+      for (const n of ['click', 'scan', 'laser', 'explosion', 'discovery']) audio.sfx(n);
+      audio.setScene('space', { danger: 0.25 });
+      audio.engine(0.6);
+      await new Promise((r) => setTimeout(r, 250));
+      audio.engine(0);
+      audio.setMuted(wasMuted);
+      return 'ok';
+    };
+    try {
+      if (navigator.webdriver) {
+        const r = await window.__AMS_AUDIO_TEST__();
+        console.log('[audio self-test]', r);
+      }
+    } catch (e) {
+      console.warn('[audio self-test] skipped:', e);
+    }
+
+    // ---------------- frame loop -------------------------------------------
+    let t = 0, ready = false;
+    function frame() {
+      const dt = engine3d.tick();
+      t += dt;
+      core.rotation.y += dt * 0.25;
+      core.rotation.x += dt * 0.11;
+      const pulse = 1 + Math.sin(t * 1.7) * 0.05;
+      core.scale.setScalar(pulse);
+      ringA.rotation.z += dt * 0.4;
+      ringB.rotation.z -= dt * 0.3;
+      ember.position.y = -18 + Math.sin(t * 0.8) * 2;
+      for (let i = 0; i < BAR_N; i++) {
+        const x = -44 + i * 1.6;
+        const h = 1.2 + Math.abs(Math.sin(t * 1.4 + i * 0.55) * Math.sin(t * 0.53 + i * 0.21)) * 7;
+        barP.set(x, -27 + h * 0.5, -18);
+        barS.set(1, h, 1);
+        barM.compose(barP, barQ, barS);
+        bars.setMatrixAt(i, barM);
+      }
+      bars.instanceMatrix.needsUpdate = true;
+      camera.position.x = Math.sin(t * 0.07) * 2.5;
+      camera.position.y = Math.cos(t * 0.05) * 1.5;
+      camera.lookAt(0, 0, -20);
+      engine3d.render();
+      if (!ready) { ready = true; window.__AMS__ = { ready: true }; }
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

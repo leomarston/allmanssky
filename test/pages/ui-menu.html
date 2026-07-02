@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ui-menu — main menu test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127775;</text></svg>">
+  <link rel="stylesheet" href="/src/ui/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <canvas id="game-canvas"></canvas>
+    <div id="ui-root"></div>
+  </div>
+  <script type="module">
+    import { Screens } from '/src/ui/screens.js';
+
+    const uiRoot = document.getElementById('ui-root');
+    const screens = new Screens(uiRoot);
+
+    // show the title screen; resolves only on player choice (never in smoke)
+    screens.mainMenu({ hasSave: true }).then((choice) => {
+      console.log('menu choice', choice);
+    });
+
+    // ready once the overlay has painted
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      window.__AMS__ = { ready: true };
+    }));
+  </script>
+</body>
+</html>
