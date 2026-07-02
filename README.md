@@ -12,9 +12,24 @@ texture, mesh, sound, and world is generated procedurally at runtime.
 ## Run
 
 ```bash
-npm start            # serves on http://localhost:8087
+npm start            # serves on http://localhost:8087 (zero dependencies)
 ```
 (or any static file server from the repo root)
+
+## Deploy (Railway)
+
+The repo ships a `Dockerfile` (Node 22 + the zero-dependency `server.mjs`,
+which respects Railway's injected `$PORT`, gzips assets, and long-caches
+`vendor/`). No build step, no npm install.
+
+1. [railway.com](https://railway.com) → **New Project → Deploy from GitHub repo**
+   → pick this repository.
+2. In the service **Settings → Source**, choose the branch to deploy.
+   Railway auto-detects the `Dockerfile`.
+3. **Settings → Networking → Generate Domain** — the game is live at that URL.
+
+Any other Docker host works the same way:
+`docker build -t allmanssky . && docker run -p 8087:8087 allmanssky`
 
 ## Test
 

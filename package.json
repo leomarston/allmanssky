@@ -4,7 +4,7 @@
   "description": "AllMansSky — an open-world procedural space exploration game for the browser (WebGL2, no build step).",
   "type": "module",
   "scripts": {
-    "start": "python3 -m http.server 8087",
+    "start": "node server.mjs",
     "test": "node test/smoke.mjs"
   },
   "repository": {

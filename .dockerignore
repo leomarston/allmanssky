@@ -1,0 +1,6 @@
+node_modules
+test
+docs
+.git
+*.md
+package*.json
