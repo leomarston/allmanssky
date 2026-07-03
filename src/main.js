@@ -48,11 +48,13 @@ class Game {
 
     // pointer lock MUST be requested synchronously inside the gesture handler:
     // Safari and Firefox reject requests made later in the frame (e.g. from the
-    // render loop), which left the mouse uncaptured on those browsers.
-    this.canvas.addEventListener('mousedown', () => {
-      if (this.state && !this.paused && !input.pointerLocked && !this.ui?.anyOpen?.()) {
-        input.requestPointerLock();
-      }
+    // render loop). Listen at window level so no overlay between the cursor and
+    // the canvas can silently starve the request — skip only genuine UI clicks.
+    window.addEventListener('mousedown', (e) => {
+      if (!this.state || this.paused || input.pointerLocked) return;
+      if (this.ui?.anyOpen?.()) return;
+      if (e.target.closest?.('button, input, select, textarea, a, [data-interactive]')) return;
+      input.requestPointerLock();
     });
 
     // visible prompt while the game runs without mouse capture

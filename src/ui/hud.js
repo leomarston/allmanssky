@@ -25,6 +25,10 @@ export class HUD {
   /** @param {HTMLElement} uiRoot the #ui-root overlay element */
   constructor(uiRoot) {
     this.root = el('div', 'ams-hud mode-hidden', uiRoot);
+    // inline because the base `#ui-root > *` ID rule out-specifies the
+    // .ams-hud class rule — without this the invisible full-screen HUD
+    // container swallows canvas clicks and pointer lock can never engage
+    this.root.style.pointerEvents = 'none';
     this.root.dataset.reticle = 'dot';
     this.mode = 'hidden';
     this._last = {};
