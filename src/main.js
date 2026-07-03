@@ -19,6 +19,7 @@ import { GalaxyMap } from './ui/mapui.js';
 import { QuestUI } from './ui/questui.js';
 import { BuildUI } from './ui/buildui.js';
 import { ShipyardUI } from './ui/shipyardui.js';
+import { PhotoMode } from './ui/photomode.js';
 import { audio } from './audio/audio.js';
 import { AMS_VERSION, AMS_VERSION_NOTE } from './core/version.js';
 
@@ -42,6 +43,7 @@ class Game {
     this.state = null;       // active state object
     this.paused = false;
     this._dead = false;
+    this.photo = new PhotoMode(this);
 
     // first user gesture unlocks audio
     const unlock = () => { audio.init(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
@@ -269,8 +271,23 @@ class Game {
     const frame = () => {
       requestAnimationFrame(frame);
       const dt = this.engine.tick();
+
+      // photo mode freezes the world and renders through a free camera
+      if (this.photo.isOpen) {
+        if (input.actionPressed('photo') || input.actionPressed('escape')) {
+          this.photo.close();          // consume the frame so P doesn't re-open below
+          this.engine.render();
+          input.endFrame();
+          return;
+        }
+        this.photo.update(dt);
+        this.photo.renderFrame();
+        input.endFrame();
+        return;
+      }
+
       this.lockHint.style.display =
-        this.state && !this.paused && !input.aiming && !this.ui?.anyOpen?.()
+        this.state && !this.paused && !input.aiming && !this.ui?.anyOpen?.() && !this.photo.isOpen
           ? 'block' : 'none';
       if (this.state && !this.paused) {
         if (input.actionPressed('escape')) {
@@ -280,6 +297,10 @@ class Game {
           else if (this.ui.quest.isOpen) this.ui.quest.close();
           else if (this.ui.shipyard.isOpen) this.ui.shipyard.close();
           else if (!this.screens.isOpen) this._pause();
+        }
+        if (input.actionPressed('photo') && !this.screens.isOpen && !this.ui.anyOpen()) {
+          input.exitPointerLock();
+          this.photo.open();
         }
         if (input.actionPressed('inventory') && !this.screens.isOpen) this.ui.inventory.toggle();
         this.state.update(dt);
