@@ -196,29 +196,60 @@ export class TerrainRenderer {
     this._snowY = frozen ? this._baseY + 1.5 : this._baseY + 68 * this._bandScale;
 
     this.material = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.95, metalness: 0.0,
+      vertexColors: true, roughness: 0.9, metalness: 0.0,
     });
-    // world-space detail albedo: vertex colors are ~2 m resolution, far too
-    // coarse to read up close — two octaves of tiling noise carry the sub-metre
-    // grain (soil mottle + fine speckle) that makes ground feel material
+    // world-space detail: vertex colors are ~2 m resolution, far too coarse to
+    // read up close. Three octaves of tiling noise carry sub-metre albedo grain,
+    // roughness break-up (so the sun glances across the ground), and — the big
+    // one — screen-fading MICRO-RELIEF normals so flat ground catches light and
+    // reads as real material instead of a painted plane.
     this._detailTex = makeDetailTexture(seed);
     this.material.onBeforeCompile = (shader) => {
       shader.uniforms.uDetail = { value: this._detailTex };
+      shader.uniforms.uBumpAmt = { value: 1.25 };
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vAmsWorld;')
         .replace('#include <begin_vertex>',
           '#include <begin_vertex>\nvAmsWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform sampler2D uDetail;\nvarying vec3 vAmsWorld;')
+        .replace('#include <common>', [
+          '#include <common>',
+          'uniform sampler2D uDetail;',
+          'uniform float uBumpAmt;',
+          'varying vec3 vAmsWorld;',
+          // combined detail height for micro-relief (fine grain + mid mottle)
+          'float amsDetailH(vec2 w){ return texture2D(uDetail, w*0.19).r*0.72 + texture2D(uDetail, w*0.031).g*0.28; }',
+        ].join('\n'))
         .replace('#include <color_fragment>', [
           '#include <color_fragment>',
+          'float dCam = length(vAmsWorld - cameraPosition);',
           'float dNear = texture2D(uDetail, vAmsWorld.xz * 0.19).r;',
           'float dMid  = texture2D(uDetail, vAmsWorld.xz * 0.031).g;',
-          'float dFade = 1.0 - smoothstep(60.0, 260.0, length(vAmsWorld - cameraPosition));',
-          'diffuseColor.rgb *= 1.0 + (dNear - 0.5) * 0.34 * dFade + (dMid - 0.5) * 0.22;',
+          'float dFar  = texture2D(uDetail, vAmsWorld.xz * 0.0067).g;',
+          'float dFade = 1.0 - smoothstep(60.0, 260.0, dCam);',
+          'diffuseColor.rgb *= 1.0 + (dNear - 0.5) * 0.42 * dFade + (dMid - 0.5) * 0.26 + (dFar - 0.5) * 0.13;',
+        ].join('\n'))
+        .replace('#include <roughnessmap_fragment>', [
+          '#include <roughnessmap_fragment>',
+          'roughnessFactor *= 0.84 + 0.30 * texture2D(uDetail, vAmsWorld.xz * 0.031).g;',
+        ].join('\n'))
+        .replace('#include <normal_fragment_begin>', [
+          '#include <normal_fragment_begin>',
+          'float amsFade = 1.0 - smoothstep(28.0, 185.0, length(vAmsWorld - cameraPosition));',
+          'if (amsFade > 0.001) {',
+          '  float e = 0.6;',
+          '  vec2 w = vAmsWorld.xz;',
+          '  float hl = amsDetailH(w - vec2(e,0.0)); float hr = amsDetailH(w + vec2(e,0.0));',
+          '  float hd = amsDetailH(w - vec2(0.0,e)); float hu = amsDetailH(w + vec2(0.0,e));',
+          '  vec3 wMicro = normalize(vec3((hl-hr)*uBumpAmt, 1.0, (hd-hu)*uBumpAmt));',
+          '  mat3 amsV = mat3(viewMatrix);',            // world→view rotation (terrain mesh is unrotated)
+          '  vec3 vUp = normalize(amsV * vec3(0.0,1.0,0.0));',
+          '  vec3 vMicro = normalize(amsV * wMicro);',
+          '  normal = normalize(normal + (vMicro - vUp) * amsFade);',
+          '}',
         ].join('\n'));
     };
-    this.material.customProgramCacheKey = () => 'ams-terrain-detail';
+    this.material.customProgramCacheKey = () => 'ams-terrain-detail-v2';
 
     // chunk bookkeeping
     this.chunks = new Map();               // "cx,cz" -> { mesh, lod, cx, cz }
