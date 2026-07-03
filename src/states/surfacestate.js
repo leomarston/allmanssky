@@ -25,6 +25,12 @@ import { GroundCombat } from '../gameplay/combat.js';
 import { BaseBuilder } from '../gameplay/basebuilding.js';
 import { WeatherSystem } from '../render/weather.js';
 import { SkyBodies } from '../render/skybodies.js';
+import { WaypointLayer } from '../ui/waypoints.js';
+import { MachineRunner } from '../gameplay/machines.js';
+import { RefinerUI } from '../ui/refinerui.js';
+import { createCockpit } from '../render/cockpit.js';
+import { createArcforge } from '../render/arcforge.js';
+import { UnderwaterSystem } from '../render/underwater.js';
 import { audio } from '../audio/audio.js';
 
 const BOARD_RANGE = 6;
@@ -69,19 +75,28 @@ export class SurfaceState {
     this.effects = new EffectsSystem(this.scene);
     this.weather = new WeatherSystem(this.scene, this.def, this.def.seed);
     this.skyBodies = new SkyBodies(this.scene, this.system, this.planetIndex);
+    this.underwater = new UnderwaterSystem(this.scene, this.def, this.field);
 
     // ship — parked or inbound depending on how we arrived
     const lp = gs.location.landingPos;
     const shipBuild = buildShip(gs.ship.seed, gs.ship.class);
     this.shipObj = shipBuild;
     this.scene.add(shipBuild.group);
+    const shipStats = gs.ship.stats ?? {};
     this.shipCtl = new ShipController(shipBuild.group, {
-      maxSpeed: 62 * (1 + gs.upgrades.shipSpeed * 0.2),
-      agility: 1.05,
+      maxSpeed: 62 * (1 + gs.upgrades.shipSpeed * 0.2) * (shipStats.maxSpeedMult ?? 1),
+      agility: 1.05 * (shipStats.agility ?? 1),
       boostMult: 1.8,
     });
     this.shipCtl.camOffset.set(0, 2.6, 10.5);
     this.trail = this.effects.engineTrail?.(shipBuild.group, '#7de8ff') ?? null;
+
+    // embodiment: first-person cockpit + handheld Arcforge (camera children)
+    this.scene.add(this.camera);
+    this.cockpit = createCockpit(gs.ship.class, gs.ship.seed);
+    this.camera.add(this.cockpit.group);
+    this.arcforge = createArcforge();
+    this.camera.add(this.arcforge.group);
 
     this.player = new PlayerController(this.camera, this.field, this.def.gravity);
     this.player.jetpack = gs.jetpack ?? 1;
@@ -116,6 +131,9 @@ export class SurfaceState {
     this.scanner = new Scanner(gs);
     this.combat = new GroundCombat(this.scene, this.effects, gs, this);
     this.builder = new BaseBuilder(this.scene, this.field, gs, this.systemId, this.planetIndex);
+    this.machines = new MachineRunner(gs);
+    this.refinerUI = new RefinerUI(gs);
+    this.waypoints = new WaypointLayer(document.getElementById('ui-root'));
 
     // suit headlamp (T)
     this.torch = new THREE.SpotLight(0xf2ecd8, 0, 60, 0.52, 0.45, 1.2);
@@ -232,9 +250,14 @@ export class SurfaceState {
       const agl = Math.max(0, this.shipAGL);
       this.scene.fog.density *= THREE.MathUtils.clamp(1 - (agl / 650) * 0.65, 0.32, 1);
     }
+    // MUST run after every other fog writer — owns the fog while submerged
+    this.underwater.update(dt, this.camera.position, this.player.position);
 
-    const uiOpen = ctx.ui.anyOpen?.() ?? false;
+    const uiOpen = (ctx.ui.anyOpen?.() ?? false) || this.refinerUI.isOpen;
     const inShip = this.mode !== 'foot';
+    this.scanner.update(dt);
+    this.machines.update(dt, this.player.position);
+    this.waypoints.update(this.camera, this.scanner.markers);
 
     // world streaming follows the ship in flight (look-ahead so terrain is
     // there before you are), the player on foot
@@ -252,6 +275,7 @@ export class SurfaceState {
     else if (this.mode === 'ship') this._updateFlight(dt, uiOpen);
     else if (this.mode === 'auto') this._updateAuto(dt);
     else if (this.mode === 'seated') this._updateSeated(dt, uiOpen);
+    this._applyViewMode(dt, uiOpen);
 
     this.survival.update(dt, {
       planetDef: this.def,
@@ -260,9 +284,43 @@ export class SurfaceState {
       moving: !inShip && this.player.speed > 0.5,
       sprinting: !inShip && input.action('sprint') && this.player.speed > 6,
       storm: inShip ? 0 : this.weather.intensity,
+      submerged: !inShip && this.player.swimming && this.player.headUnder,
     });
 
     this._hud(dt, sunElev);
+  }
+
+  /** cockpit vs exterior hull visibility + embodiment animation per mode */
+  _applyViewMode(dt, uiOpen) {
+    const gs = this.ctx.gameState;
+    const flying = this.mode === 'ship' || this.mode === 'seated';
+    // V toggles cockpit/chase while in the ship (on foot V is the scanner)
+    if (flying && !uiOpen && input.actionPressed('scan')) {
+      this.shipCtl.viewMode = this.shipCtl.viewMode === 'cockpit' ? 'chase' : 'cockpit';
+      audio.sfx('click');
+    }
+    // scripted landings/takeoffs always play out in third person
+    const cockpitOn = flying && this.shipCtl.viewMode === 'cockpit';
+    this.cockpit.group.visible = cockpitOn;
+    this.shipObj.group.visible = !cockpitOn;
+    this.arcforge.setVisible(this.mode === 'foot');
+    if (cockpitOn) {
+      this.cockpit.update(dt, {
+        throttle: this.shipCtl.throttle,
+        boost: this.shipCtl.boost,
+        speed: this.shipCtl.speed,
+        agl: this.shipAGL,
+        health: gs.ship.hull / gs.ship.hullMax,
+      });
+    }
+    if (this.mode === 'foot') {
+      this.arcforge.update(dt, {
+        mode: gs.tool.mode,
+        firing: input.mouseDown[0] && input.aiming && !this.builder.active,
+        moveSpeed: this.player.speed,
+        onGround: this.player.onGround,
+      });
+    }
   }
 
   _updateFoot(dt, uiOpen, sunElev) {
@@ -411,8 +469,16 @@ export class SurfaceState {
           label = 'F — SALVAGE WRECK';
           if (input.actionPressed('interact')) this._salvage(prop);
         } else if (prop.kind === 'outpost') {
-          label = 'F — TRADE AT OUTPOST';
+          label = 'F — TRADE · H — SHIPYARD';
           if (input.actionPressed('interact')) ctx.ui.trade?.open?.(this.system);
+          if (input.keyPressed('KeyH')) ctx.ui.shipyard?.open?.(`outpost:${this.def.id}`, { title: 'OUTPOST SHIPWRIGHT' });
+        }
+      }
+      if (!label) {
+        const m = this.machines.nearestInteractable(ppos, 4);
+        if (m) {
+          label = `F — ${m.label}`;
+          if (input.actionPressed('interact')) this.refinerUI.open(m.rec);
         }
       }
     }
@@ -494,6 +560,9 @@ export class SurfaceState {
       gs.location.mode = 'surface';
     }
     this.trail?.dispose?.();
+    this.cockpit?.dispose?.();
+    this.arcforge?.dispose?.();
+    this.underwater?.dispose?.();
     this.skyBodies?.dispose?.();
     this.terrain?.dispose?.();
     this.weather?.dispose?.();
@@ -505,6 +574,9 @@ export class SurfaceState {
     this.mining?.dispose?.();
     this.combat?.dispose?.();
     this.builder?.dispose?.();
+    this.machines?.dispose?.();
+    this.refinerUI?.close?.();
+    this.waypoints?.dispose?.();
     this.scene = null;
   }
 }

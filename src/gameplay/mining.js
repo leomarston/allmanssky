@@ -48,10 +48,10 @@ export class GroundMining {
     }
     const endPos = targetPos ?? origin.clone().addScaledVector(dir, REACH);
 
-    // beam visual from just below the camera (hand position)
-    const from = origin.clone()
-      .addScaledVector(dir, 0.8)
-      .add(new THREE.Vector3(0, -0.35, 0));
+    // beam starts at the Arcforge's emitter tip (fallback: hand position)
+    const from = surface.arcforge
+      ? surface.arcforge.muzzleWorld(new THREE.Vector3()).addScaledVector(dir, 0.5)
+      : origin.clone().addScaledVector(dir, 0.8).add(new THREE.Vector3(0, -0.35, 0));
     if (!this.beam) {
       this.beam = this.effects.miningBeam?.(from, endPos, '#ffb454');
       audio.sfx('mine');
@@ -103,7 +103,9 @@ export class GroundMining {
       if (p.y <= surface.field.height(p.x, p.z)) { hit = p; break; }
       if (origin.distanceTo(p) > REACH) break;
     }
-    const from = origin.clone().addScaledVector(dir, 0.8).add(new THREE.Vector3(0, -0.35, 0));
+    const from = surface.arcforge
+      ? surface.arcforge.muzzleWorld(new THREE.Vector3()).addScaledVector(dir, 0.5)
+      : origin.clone().addScaledVector(dir, 0.8).add(new THREE.Vector3(0, -0.35, 0));
     const endPos = hit ?? origin.clone().addScaledVector(dir, REACH);
     if (!this.beam) { this.beam = this.effects.miningBeam?.(from, endPos, '#7dff8a'); audio.sfx('mine'); }
     else this.beam.set?.(from, endPos);

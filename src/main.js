@@ -18,6 +18,7 @@ import { TradeUI } from './ui/tradeui.js';
 import { GalaxyMap } from './ui/mapui.js';
 import { QuestUI } from './ui/questui.js';
 import { BuildUI } from './ui/buildui.js';
+import { ShipyardUI } from './ui/shipyardui.js';
 import { audio } from './audio/audio.js';
 import { AMS_VERSION, AMS_VERSION_NOTE } from './core/version.js';
 
@@ -121,10 +122,28 @@ class Game {
       map: new GalaxyMap(this.galaxy, gameState),
       quest: new QuestUI(gameState),
       build: new BuildUI(gameState),
+      shipyard: new ShipyardUI(gameState),
       anyOpen: () =>
         !!(this.ui.inventory.isOpen || this.ui.trade.isOpen || this.ui.map.isOpen
-          || this.ui.quest.isOpen || this.screens.isOpen),
+          || this.ui.quest.isOpen || this.ui.shipyard.isOpen || this.screens.isOpen),
     };
+
+    // Warden wanted level — pips under the compass, evade timer sweep
+    this._wantedChip ??= (() => {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;left:50%;top:64px;transform:translateX(-50%);display:none;align-items:center;gap:5px;padding:5px 12px;background:rgba(28,8,10,.72);border:1px solid rgba(255,84,60,.55);backdrop-filter:blur(4px);z-index:15;';
+      this.uiRoot.appendChild(el);
+      return el;
+    })();
+    events.on('combat:wanted', ({ level, evading01 }) => {
+      if (!level) { this._wantedChip.style.display = 'none'; return; }
+      this._wantedChip.style.display = 'flex';
+      this._wantedChip.innerHTML =
+        `<span style="font-size:9px;letter-spacing:.22em;color:#ff5a3c;">WARDEN ALERT</span>`
+        + Array.from({ length: 5 }, (_, i) =>
+          `<span style="width:12px;height:5px;background:${i < level ? '#ff5a3c' : '#3a1418'};display:inline-block;"></span>`).join('')
+        + (evading01 > 0 ? `<span style="font-size:9px;color:#7fa3b4;margin-left:6px;">EVADING ${Math.round(evading01 * 100)}%</span>` : '');
+    });
     this.quests = new QuestSystem(gameState, this.galaxy);
     this.quests.init?.();
 
@@ -253,6 +272,7 @@ class Game {
           else if (this.ui.trade.isOpen) this.ui.trade.close();
           else if (this.ui.map.isOpen) this.ui.map.close();
           else if (this.ui.quest.isOpen) this.ui.quest.close();
+          else if (this.ui.shipyard.isOpen) this.ui.shipyard.close();
           else if (!this.screens.isOpen) this._pause();
         }
         if (input.actionPressed('inventory') && !this.screens.isOpen) this.ui.inventory.toggle();

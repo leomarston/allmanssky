@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>waypoints layer test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'></svg>">
+  <link rel="stylesheet" href="/src/ui/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <canvas id="game-canvas"></canvas>
+    <div id="ui-root"></div>
+  </div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { SimplexNoise } from '/src/core/noise.js';
+    import { WaypointLayer } from '/src/ui/waypoints.js';
+    import { Scanner } from '/src/gameplay/scanner.js';
+
+    const engine = new Engine(document.getElementById('game-canvas'));
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a1322);
+    scene.fog = new THREE.Fog(0x0e1a2c, 180, 1500);
+
+    const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 4000);
+
+    // ---- gentle rolling ground plane -------------------------------------
+    const tnoise = new SimplexNoise(20260703);
+    const height = (x, z) => tnoise.fbm2(x * 0.004, z * 0.004, 4) * 6
+      + tnoise.noise2D(x * 0.03, z * 0.03) * 0.5;
+
+    const GSIZE = 2000, GSEG = 190;
+    const ggeom = new THREE.PlaneGeometry(GSIZE, GSIZE, GSEG, GSEG);
+    ggeom.rotateX(-Math.PI / 2);
+    {
+      const pos = ggeom.attributes.position;
+      const colors = new Float32Array(pos.count * 3);
+      const c = new THREE.Color();
+      const lo = new THREE.Color(0x16283e), hi = new THREE.Color(0x30516a);
+      const acc = new THREE.Color(0x1e5a64);
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), z = pos.getZ(i);
+        const h = height(x, z);
+        pos.setY(i, h);
+        c.copy(lo).lerp(hi, Math.min(1, Math.max(0, (h + 6) / 14)));
+        if (tnoise.noise2D(x * 0.02 + 7, z * 0.02 - 3) > 0.42) c.lerp(acc, 0.5);
+        colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+      }
+      ggeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      ggeom.computeVertexNormals();
+    }
+    scene.add(new THREE.Mesh(ggeom, new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.95, metalness: 0,
+    })));
+
+    const sun = new THREE.DirectionalLight(0xaec6f0, 1.5);
+    sun.position.set(-0.4, 0.7, 0.3);
+    scene.add(sun, new THREE.AmbientLight(0x3a5474, 1.4));
+
+    // ---- fake markers: one of every kind, varying distances ---------------
+    // bearing° measured from camera forward (-Z); >0 = to the right
+    const specs = [
+      { kind: 'node',     label: 'PYRENE DEPOSIT',  color: '#ffd04a', bearing: -21, dist: 95 },
+      { kind: 'crash',    label: 'CRASHED HULL',                      bearing: 31,  dist: 150 },
+      { kind: 'custom',   label: 'VESPER SIGNAL',   sublabel: 'QUEST MARKER', bearing: 12, dist: 210 },
+      { kind: 'ruin',     label: 'LUMINEL RUIN',                      bearing: -40, dist: 260 },
+      { kind: 'pad',      label: 'LANDING PAD',                       bearing: 50,  dist: 310 },
+      { kind: 'beacon',   label: 'LUMINEL BEACON',                    bearing: -62, dist: 430 },
+      { kind: 'outpost',  label: 'MERIDIAN OUTPOST',                  bearing: -3,  dist: 610 },
+      { kind: 'creature', label: 'THALWEG STRIDER',                   bearing: 170, dist: 120 }, // behind → edge arrow
+    ];
+    const camY = height(0, 0) + 13;
+    const markers = specs.map((s, i) => {
+      const a = THREE.MathUtils.degToRad(s.bearing);
+      const x = Math.sin(a) * s.dist, z = -Math.cos(a) * s.dist;
+      const y = height(x, z);
+      // subtle anchor so each marker visibly pins to something in-world
+      const anchor = new THREE.Mesh(
+        new THREE.OctahedronGeometry(1.1),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(s.color ?? '#7de8ff').multiplyScalar(0.55) }),
+      );
+      anchor.position.set(x, y + 2.2, z);
+      scene.add(anchor);
+      return { id: `m${i}`, worldPos: new THREE.Vector3(x, y + 4.5, z), kind: s.kind, label: s.label, sublabel: s.sublabel, color: s.color };
+    });
+
+    const waypoints = new WaypointLayer(document.getElementById('ui-root'));
+
+    // ---- scanner pulse ring, re-fired continuously (mock surface) ---------
+    const mockSurface = {
+      scene,
+      field: { height, seaY: -Infinity },
+      player: { position: new THREE.Vector3(0, height(0, -70) + 1.8, -70) },
+      props: { all: [] },
+      def: { id: 'test', name: 'test', floraDensity: 0 },
+    };
+    const scanner = new Scanner({ discover: () => false, stats: {} });
+
+    engine.setScene(scene, camera, { bloomStrength: 0.6, bloomRadius: 0.55, bloomThreshold: 0.85 });
+    engine.setExposure(1.05);
+
+    let t = 0, announced = false;
+    function frame() {
+      const dt = engine.tick();
+      t += dt;
+      // slow pan: markers drift across the view; edge markers clamp to arrows
+      camera.position.set(0, camY, 0);
+      camera.rotation.set(-0.1, 0.3 * Math.sin(t * 0.3), 0, 'YXZ');
+      if (!scanner._ring) { scanner._last = -Infinity; scanner.scan(mockSurface); }
+      scanner.update(dt);
+      waypoints.update(camera, markers);
+      engine.render();
+      if (!announced) { announced = true; window.__AMS__ = { ready: true }; }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

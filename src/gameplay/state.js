@@ -45,7 +45,7 @@ export class GameState {
   }
 
   // ---- inventory ----
-  get maxSlots() { return BASE_SLOTS + this.upgrades.shipCargo * 8; }
+  get maxSlots() { return BASE_SLOTS + this.upgrades.shipCargo * 8 + (this.ship.stats?.cargoBonus ?? 0); }
   usedSlots() { return this.inventory.length; }
 
   countItem(id) { return this.inventory.find((s) => s.id === id)?.qty ?? 0; }

@@ -38,6 +38,8 @@ export class PlayerController {
     this._stepPhase = 0;       // footstep cycle
     this._landDip = 0;         // camera dip after a hard landing
     this._baseFov = camera.fov;
+    this.swimming = false;
+    this.headUnder = false;
   }
 
   teleport(x, z, yOffset = 0.5) {
@@ -55,6 +57,12 @@ export class PlayerController {
     this.yaw -= input.mouseDX * this.sensitivity + input.lookX * 2.1 * dt;
     this.pitch -= input.mouseDY * this.sensitivity + input.lookY * 1.6 * dt;
     this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch));
+
+    // water: chest-deep or more → buoyant swimming replaces walking
+    const seaY = this.field.seaY;
+    this.swimming = Number.isFinite(seaY) && this.position.y + 1.1 < seaY;
+    this.headUnder = Number.isFinite(seaY) && this.position.y + EYE_HEIGHT < seaY;
+    if (this.swimming) { this._updateSwim(dt, seaY); return; }
 
     // wish direction in world space from yaw
     let fx = 0, fz = 0;
@@ -159,6 +167,54 @@ export class PlayerController {
       this.camera.fov += (wantFov - this.camera.fov) * Math.min(1, dt * 5);
       this.camera.updateProjectionMatrix();
     }
+  }
+
+  /** buoyant motion: swim toward the look direction, Space up, C down */
+  _updateSwim(dt, seaY) {
+    const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
+    let fx = 0, fz = 0;
+    if (input.action('forward')) fz += 1;
+    if (input.action('back')) fz -= 1;
+    if (input.action('left')) fx -= 1;
+    if (input.action('right')) fx += 1;
+    const len = Math.hypot(fx, fz) || 1;
+    fx /= len; fz /= len;
+
+    const speed = 4.2 * (input.action('sprint') ? 1.4 : 1);
+    // forward swimming follows the camera pitch — dive by looking down
+    const pitchY = fz > 0 ? Math.sin(this.pitch) : 0;
+    const wish = new THREE.Vector3(
+      (fx * cos - fz * sin) * Math.cos(this.pitch),
+      pitchY,
+      (-fx * sin - fz * cos) * Math.cos(this.pitch),
+    ).multiplyScalar(speed);
+    if (input.action('jump')) wish.y += 2.6;   // stroke upward
+    if (input.action('down')) wish.y -= 2.6;
+
+    const t = 1 - Math.exp(-4.5 * dt);
+    this.velocity.lerp(wish, t);
+    // gentle buoyancy toward the surface when idle
+    if (Math.abs(wish.y) < 0.1) this.velocity.y += 1.1 * dt;
+    this._apply(dt);
+
+    // stay off the seabed, don't fly out of the water
+    const groundY = this.field.height(this.position.x, this.position.z);
+    if (this.position.y < groundY + 0.4) { this.position.y = groundY + 0.4; if (this.velocity.y < 0) this.velocity.y = 0; }
+    if (this.position.y + 1.1 > seaY && this.velocity.y > 0) {
+      // breaching: only jump out with real upward momentum near shore
+      this.velocity.y = Math.min(this.velocity.y, 2.2);
+    }
+    this.onGround = false;
+    this.jetpack = Math.min(1, this.jetpack + 0.1 * dt);
+
+    // slow bob, no footsteps underwater
+    this._landDip = Math.max(0, this._landDip - dt);
+    this.camera.position.set(
+      this.position.x,
+      this.position.y + EYE_HEIGHT * 0.82 + Math.sin(performance.now() / 900) * 0.05,
+      this.position.z,
+    );
+    this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, Math.sin(performance.now() / 1300) * 0.01, 'YXZ'));
   }
 
   _apply(dt) {

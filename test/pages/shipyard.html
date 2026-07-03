@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>shipyard — hangar interface test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128760;</text></svg>">
+  <link rel="stylesheet" href="/src/ui/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+  <style>
+    body { background: radial-gradient(120% 100% at 50% 0%, #08141c, #01050a); }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="ui-root"></div>
+  </div>
+  <script type="module">
+    import { ShipyardUI } from '/src/ui/shipyardui.js';
+    import { offersFor } from '/src/gameplay/shipmarket.js';
+
+    // determinism sanity — a mismatch logs a console error and fails the smoke test
+    const a = JSON.stringify(offersFor('x', 4));
+    const b = JSON.stringify(offersFor('x', 4));
+    if (a !== b) console.error('offersFor is not deterministic');
+
+    // fake GameState-like object (matches the gs.ship contract in state.js)
+    const gs = {
+      ship: { class: 'swift', seed: 123, name: 'First Light', hullMax: 100, shieldMax: 60, fuel: 1 },
+      lumens: 30000,
+      addLumens() {},
+      save() {},
+    };
+
+    // 'ember-mooring' deterministically yields 4 offers: C vanta, A swift,
+    // S vanta, C prospect — exercises every grade badge tier that matters.
+    const ui = new ShipyardUI(gs);
+    ui.open('ember-mooring', { title: 'Ember Mooring' });
+
+    const tick = () => {
+      if (ui.thumbnailsReady) window.__AMS__ = { ready: true };
+      else requestAnimationFrame(tick);
+    };
+    tick();
+  </script>
+</body>
+</html>

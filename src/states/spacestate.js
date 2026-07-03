@@ -14,6 +14,7 @@ import { ShipController } from '../gameplay/shipcontrol.js';
 import { SpaceCombat } from '../gameplay/combat.js';
 import { SpaceMining } from '../gameplay/mining.js';
 import { SpaceLife } from '../gameplay/spacelife.js';
+import { createCockpit } from '../render/cockpit.js';
 import { audio } from '../audio/audio.js';
 
 const LAND_RANGE = 1.75;      // multiples of planet display radius
@@ -77,14 +78,21 @@ export class SpaceState {
     const shipBuild = buildShip(gs.ship.seed, gs.ship.class);
     this.shipObj = shipBuild;
     this.scene.add(shipBuild.group);
+    const shipStats = gs.ship.stats ?? {};
     this.shipCtl = new ShipController(shipBuild.group, {
-      maxSpeed: 55 * (1 + gs.upgrades.shipSpeed * 0.3),
-      agility: 1,
+      maxSpeed: 55 * (1 + gs.upgrades.shipSpeed * 0.3) * (shipStats.maxSpeedMult ?? 1),
+      agility: shipStats.agility ?? 1,
+      boostMult: 3.2 * (shipStats.boostMult ?? 1),
     });
     this._placeShip(params);
 
     this.effects = new EffectsSystem(this.scene);
     this.trail = this.effects.engineTrail?.(shipBuild.group, '#7de8ff') ?? null;
+
+    // first-person cockpit (V toggles cockpit/chase)
+    this.scene.add(this.camera);
+    this.cockpit = createCockpit(gs.ship.class, gs.ship.seed);
+    this.camera.add(this.cockpit.group);
     this.combat = new SpaceCombat(this.scene, this.effects, gs, this.system, this.shipCtl);
     this.mining = new SpaceMining(this.scene, this.effects, gs, this);
     this.life = new SpaceLife(this.scene, this.system, gs, this);
@@ -198,6 +206,25 @@ export class SpaceState {
     if (!this._warping) this._interactions(dt);
     // after _interactions so anomaly prompts can claim the interact label
     this.life.update(dt, this.shipCtl.position);
+
+    // cockpit vs chase view
+    if (input.actionPressed('scan') && !ctx.ui.anyOpen?.()) {
+      this.shipCtl.viewMode = this.shipCtl.viewMode === 'cockpit' ? 'chase' : 'cockpit';
+      audio.sfx('click');
+    }
+    const cockpitOn = this.shipCtl.viewMode === 'cockpit' && !this._warping;
+    this.cockpit.group.visible = cockpitOn;
+    this.shipObj.group.visible = !cockpitOn;
+    if (cockpitOn) {
+      const near = this._near ?? this._nearestPlanet();
+      this.cockpit.update(dt, {
+        throttle: this.shipCtl.throttle,
+        boost: this.shipCtl.boost || (this._pulseLevel ?? 0) > 0.3,
+        speed: this.shipCtl.speed,
+        agl: Math.max(0, near.dist ?? 9999),
+        health: gs.ship.hull / gs.ship.hullMax,
+      });
+    }
     this._hud(dt);
   }
 
@@ -269,10 +296,14 @@ export class SpaceState {
         ? this.station.group.localToWorld(this.station.dockPos.clone())
         : this.station.group.position;
       if (this.shipCtl.position.distanceTo(dockWorld) < DOCK_RANGE) {
-        interact = 'F — DOCK AT STATION';
+        interact = 'F — TRADE · H — SHIPYARD';
         if (input.actionPressed('interact')) {
           audio.sfx('dock');
           ctx.ui.trade?.open?.(this.system);
+        }
+        if (input.keyPressed('KeyH')) {
+          audio.sfx('dock');
+          ctx.ui.shipyard?.open?.(`station:${this.systemId}`, { title: this.system.station?.name ?? 'STATION SHIPYARD' });
         }
       }
     }
@@ -371,6 +402,7 @@ export class SpaceState {
     if (!this._warping) gs.location.pos = this.shipCtl.position.toArray();
     gs.location.mode = 'space';
     this.trail?.dispose?.();
+    this.cockpit?.dispose?.();
     this._pulseFx?.dispose?.();
     this.effects?.dispose?.();
     this.mining?.dispose?.();

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>industry — refiner + planter test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'></svg>">
+  <link rel="stylesheet" href="/src/ui/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <canvas id="game-canvas"></canvas>
+    <div id="ui-root"></div>
+  </div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { GameState } from '/src/gameplay/state.js';
+    import { buildPiece } from '/src/gameplay/basebuilding.js';
+    import { registerMachine, MachineRunner, REFINER_RECIPES } from '/src/gameplay/machines.js';
+    import { RefinerUI } from '/src/ui/refinerui.js';
+
+    const params = new URLSearchParams(location.search);
+    const showUI = params.get('ui') !== '0';          // ?ui=0 → scene only
+    const uiKind = params.get('panel') || 'refiner';  // ?panel=planter
+
+    // ---- gs with a stocked hold so recipe chips show have/need mix ---------
+    const gs = new GameState(4242);
+    for (const [id, qty] of [
+      ['ferrox', 60], ['silica', 24], ['carbyne', 18], ['pyrene', 7],
+      ['oxylite', 1], ['voltglass', 3],   // oxylite short → cryostal row reads red
+      // no nebulite at all → voidsalt row fully red
+    ]) gs.addItem(id, qty);
+
+    // ---- mock flat-ish field (contract shape used by machines/pieces) ------
+    const field = {
+      height(x, z) { return 0.35 * Math.sin(x * 0.11) * Math.cos(z * 0.09); },
+      seaY: -50,
+    };
+
+    // ---- scene / engine ------------------------------------------------------
+    const canvas = document.getElementById('game-canvas');
+    const engine = new Engine(canvas);
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x2a2438, 90, 420);
+    const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 4000);
+    camera.position.set(0, 3.1, 6.5);
+    camera.lookAt(0, 1.0, -8);
+
+    // dusk lighting so the furnace ember carries the frame
+    const sunDir = new THREE.Vector3(-0.6, 0.22, -0.55).normalize();
+    const sun = new THREE.DirectionalLight(0xffb070, 1.5);
+    sun.position.copy(sunDir).multiplyScalar(200);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -40; sun.shadow.camera.right = 40;
+    sun.shadow.camera.top = 40; sun.shadow.camera.bottom = -40;
+    sun.shadow.camera.near = 40; sun.shadow.camera.far = 420;
+    sun.shadow.bias = -0.0012;
+    scene.add(sun, sun.target);
+    sun.target.position.set(0, 0, -8);
+    scene.add(new THREE.HemisphereLight(0x2c3a66, 0x1c2418, 0.5));
+
+    // dusk sky dome
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false, fog: false,
+      uniforms: { sunDir: { value: sunDir } },
+      vertexShader: `varying vec3 vDir;
+        void main() { vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `varying vec3 vDir; uniform vec3 sunDir;
+        void main() {
+          float h = clamp(vDir.y * 1.3, 0.0, 1.0);
+          vec3 col = mix(vec3(0.55, 0.3, 0.24), vec3(0.04, 0.06, 0.16), pow(h, 0.6));
+          float sd = max(dot(vDir, sunDir), 0.0);
+          col += vec3(1.0, 0.45, 0.2) * pow(sd, 6.0) * 0.5;
+          col += vec3(2.4, 1.4, 0.7) * pow(sd, 260.0) * 2.0;
+          gl_FragColor = vec4(col, 1.0);
+        }`,
+    });
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(1800, 24, 16), skyMat));
+
+    // ground sampled from the mock field
+    const SIZE = 420, SEG = 96;
+    const gGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+    gGeo.rotateX(-Math.PI / 2);
+    const gp = gGeo.attributes.position;
+    const gCol = new Float32Array(gp.count * 3);
+    const cA = new THREE.Color(0x4a5a3a), cB = new THREE.Color(0x6a6a4c), c = new THREE.Color();
+    for (let i = 0; i < gp.count; i++) {
+      const x = gp.getX(i), z = gp.getZ(i);
+      gp.setY(i, field.height(x, z));
+      c.lerpColors(cA, cB, 0.5 + 0.5 * Math.sin(x * 0.2 + z * 0.17));
+      gCol[i * 3] = c.r; gCol[i * 3 + 1] = c.g; gCol[i * 3 + 2] = c.b;
+    }
+    gGeo.setAttribute('color', new THREE.BufferAttribute(gCol, 3));
+    gGeo.computeVertexNormals();
+    const ground = new THREE.Mesh(gGeo,
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 }));
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // ---- place base pieces + register machines -------------------------------
+    const place = (kind, x, z, rotY = 0, extra = {}) => {
+      const y = field.height(x, z);
+      const mesh = buildPiece(kind);
+      mesh.position.set(x, y, z);
+      mesh.rotation.y = rotY;
+      scene.add(mesh);
+      const rec = { kind, x, y, z, rotY, ...extra };
+      if (kind === 'refiner' || kind === 'planter') registerMachine({ rec, mesh, gs });
+      return rec;
+    };
+
+    // refiner mid-burn: silica → voltglass, started 30 s ago of 60 s
+    const refinerRec = place('refiner', -9.6, -7.6, 0.55, {
+      job: { recipeIdx: 0, started: Date.now() - 30000, qtyRuns: 1, doneRuns: 0 },
+      output: null,
+    });
+    // planters: one mid-growth (140/180 s → flowering), one ripe (glowing bulbs)
+    const planterRec = place('planter', 7.2, -9.2, -0.35, {
+      crop: { id: 'chlorophane', planted: Date.now() - 140000, growTime: 180 },
+    });
+    place('planter', 9.6, -5.6, -0.6, {
+      crop: { id: 'chlorophane', planted: Date.now() - 400000, growTime: 180 },
+    });
+    // set dressing: crate + light mast make it read as a working base
+    place('storage', -13.2, -5.4, 0.9);
+    place('light', 10.2, -11.4);
+
+    // ---- THE MODULES: runner + UI --------------------------------------------
+    const runner = new MachineRunner(gs);
+    runner.update(0, camera.position); // settle + first crop-stage swap
+
+    // exercise the interact contract
+    const near = runner.nearestInteractable(new THREE.Vector3(-7, 1, -8), 5);
+    console.assert(near?.kind === 'refiner' && /REFINER/.test(near.label), 'nearestInteractable refiner');
+    const far = runner.nearestInteractable(new THREE.Vector3(100, 0, 100), 5);
+    console.assert(far === null, 'nearestInteractable out of range');
+    console.assert(REFINER_RECIPES.length === 6, 'recipe table');
+
+    const ui = new RefinerUI(gs);
+    if (showUI) ui.open(uiKind === 'planter' ? planterRec : refinerRec);
+
+    // ---- loop -----------------------------------------------------------------
+    engine.setScene(scene, camera, { bloomStrength: 0.75, bloomRadius: 0.55, bloomThreshold: 0.82 });
+    engine.setExposure(1.05);
+    let ready = false;
+    function frame() {
+      const dt = engine.tick();
+      runner.update(dt, camera.position);
+      engine.render();
+      if (!ready) { ready = true; window.__AMS__ = { ready: true }; }
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

@@ -21,8 +21,10 @@ export class Survival {
     const def = ctx.planetDef;
     this._sinceHit += dt;
 
-    // oxygen: thin atmospheres breathe poorly, vacuum not at all
-    const breathable = def ? Math.min(1, def.atmosphere.density * 1.6) * (def.hazard.toxic > 0.6 ? 0.3 : 1) : 0;
+    // oxygen: thin atmospheres breathe poorly, vacuum not at all — and
+    // underwater the suit is on tank air no matter the atmosphere
+    const breathable = ctx.submerged ? 0
+      : def ? Math.min(1, def.atmosphere.density * 1.6) * (def.hazard.toxic > 0.6 ? 0.3 : 1) : 0;
     const o2Rate = O2_DRAIN * (1 - breathable) * (ctx.sprinting ? 1.6 : 1);
     if (!ctx.inShip && o2Rate > 0.01) {
       gs.oxygen = Math.max(0, gs.oxygen - o2Rate * dt);

@@ -22,6 +22,8 @@ export class ShipController {
     this.enabled = true;
     this.camOffset = new THREE.Vector3(0, 2.4, 9.5);
     this.camLerp = 4.5;
+    this.viewMode = 'cockpit';        // 'cockpit' | 'chase'
+    this.cockpitOffset = new THREE.Vector3(0, 0.42, -0.15);
     this._camPos = null;
     this._shake = 0;
 
@@ -89,17 +91,26 @@ export class ShipController {
 
   _updateCamera(dt, camera) {
     if (!camera) return;
-    const desired = this._tmp.copy(this.camOffset)
-      .applyQuaternion(this.ship.quaternion)
-      .add(this.ship.position);
-    if (!this._camPos) this._camPos = desired.clone();
-    this._camPos.lerp(desired, 1 - Math.exp(-this.camLerp * dt));
-    camera.position.copy(this._camPos);
+    if (this.viewMode === 'cockpit') {
+      // first-person: locked to the canopy, sharing the hull's orientation
+      camera.position.copy(this._tmp.copy(this.cockpitOffset)
+        .applyQuaternion(this.ship.quaternion)
+        .add(this.ship.position));
+      camera.quaternion.copy(this.ship.quaternion);
+      this._camPos?.copy(camera.position);
+    } else {
+      const desired = this._tmp.copy(this.camOffset)
+        .applyQuaternion(this.ship.quaternion)
+        .add(this.ship.position);
+      if (!this._camPos) this._camPos = desired.clone();
+      this._camPos.lerp(desired, 1 - Math.exp(-this.camLerp * dt));
+      camera.position.copy(this._camPos);
 
-    // look slightly ahead of the nose for a sense of motion
-    const ahead = this.forward.clone().multiplyScalar(24).add(this.ship.position);
-    camera.up.copy(this.ship.up).applyQuaternion(this.ship.quaternion);
-    camera.lookAt(ahead);
+      // look slightly ahead of the nose for a sense of motion
+      const ahead = this.forward.clone().multiplyScalar(24).add(this.ship.position);
+      camera.up.copy(this.ship.up).applyQuaternion(this.ship.quaternion);
+      camera.lookAt(ahead);
+    }
 
     // boost FOV kick + shake
     const targetFov = this.boost ? 74 : 62;

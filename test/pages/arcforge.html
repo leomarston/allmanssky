@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>arcforge test — multitool modes</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'></svg>">
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #game-canvas { display: block; width: 100vw; height: 100vh; }
+    #mode-label {
+      position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+      color: #7de8ff; font: 12px/1.4 monospace; letter-spacing: 0.28em;
+      text-transform: uppercase; text-shadow: 0 0 8px rgba(125,232,255,0.5);
+      pointer-events: none;
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <div id="mode-label"></div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { createArcforge } from '/src/render/arcforge.js';
+    import { EffectsSystem } from '/src/render/effects.js';
+
+    const params = new URLSearchParams(location.search);
+    const forcedMode = params.get('mode');          // mine | bolt | dig
+    const forcedFire = params.get('fire') === '1';
+
+    const canvas = document.getElementById('game-canvas');
+    const label = document.getElementById('mode-label');
+    const engine = new Engine(canvas);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x070a10);
+    scene.fog = new THREE.FogExp2(0x070a10, 0.03);
+    const camera = new THREE.PerspectiveCamera(66, innerWidth / innerHeight, 0.08, 500);
+    camera.position.set(0, 1.6, 0);
+    scene.add(camera); // required: the tool is a camera child
+
+    // --- night test range -----------------------------------------------------------
+    const ground = new THREE.Mesh(
+      new THREE.CircleGeometry(70, 40),
+      new THREE.MeshStandardMaterial({ color: 0x2a333d, roughness: 0.95, metalness: 0.05 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+    const grid = new THREE.GridHelper(70, 35, 0x24505e, 0x142833);
+    grid.position.y = 0.02;
+    scene.add(grid);
+
+    // target boulder downrange
+    const rock = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(1.0, 1),
+      new THREE.MeshStandardMaterial({ color: 0x49525c, roughness: 0.85, flatShading: true })
+    );
+    rock.position.set(-1.6, 1.1, -13);
+    rock.scale.set(1.2, 0.95, 1.05);
+    scene.add(rock);
+    const targetPos = rock.position.clone();
+
+    // ambient emissive crystals for depth
+    const crystalGeo = new THREE.ConeGeometry(0.22, 1.1, 5);
+    for (const [x, z, hex, s] of [
+      [-6, -12, 0x7de8ff, 1.4], [5, -16, 0xb37dff, 1.9], [9, -9, 0x7dffb4, 1.1],
+      [-11, -20, 0xffb454, 1.6], [3, -26, 0x7de8ff, 2.4],
+    ]) {
+      const cr = new THREE.Mesh(crystalGeo, new THREE.MeshStandardMaterial({
+        color: 0x000000, emissive: new THREE.Color(hex), emissiveIntensity: 1.4,
+      }));
+      cr.position.set(x, 0.5 * s, z);
+      cr.scale.setScalar(s);
+      cr.rotation.y = x * 1.7;
+      scene.add(cr);
+    }
+
+    // --- lights: moonlight + helmet lamp ----------------------------------------------
+    const moon = new THREE.DirectionalLight(0x8fb8d8, 2.2);
+    moon.position.set(4, 8, 3);
+    scene.add(moon);
+    scene.add(new THREE.HemisphereLight(0x223447, 0x0a0d12, 1.1));
+    const lamp = new THREE.PointLight(0xffe8c8, 1.6, 4, 2);
+    lamp.position.set(-0.15, 0.18, 0.1);
+    camera.add(lamp);
+
+    // --- the tool + effects --------------------------------------------------------------
+    const arcforge = createArcforge();
+    camera.add(arcforge.group);
+    const fx = new EffectsSystem(scene);
+
+    engine.setScene(scene, camera, { bloomStrength: 0.45, bloomRadius: 0.5, bloomThreshold: 0.85 });
+    engine.setExposure(1.1);
+
+    const MODES = ['mine', 'bolt', 'dig'];
+    const BEAM_COLORS = { mine: 0xffb454, dig: 0x7dffb4 };
+    const SEG = 2.2; // seconds per mode; firing during (0.8 .. SEG)
+    const muzzle = new THREE.Vector3();
+    const beamFrom = new THREE.Vector3();
+    const boltDir = new THREE.Vector3();
+    let beam = null, beamMode = null, boltTimer = 0, sparkTimer = 0;
+    let t = 0, ready = false;
+
+    function frame() {
+      const dt = engine.tick();
+      t += dt;
+
+      const phase = t % (SEG * MODES.length);
+      const mode = forcedMode || MODES[Math.floor(phase / SEG)];
+      const local = phase % SEG;
+      const firing = forcedMode ? forcedFire : local > 0.8;
+      const moveSpeed = (Math.sin(t * 0.6) * 0.5 + 0.5) * 6;
+
+      arcforge.update(dt, { mode, firing, moveSpeed, onGround: true });
+      arcforge.muzzleWorld(muzzle);
+
+      // beams for mine/dig, tracers for bolt — all anchored at muzzleWorld()
+      if (firing && mode !== 'bolt') {
+        // start the visible beam a short step out from the muzzle so the
+        // near-camera additive core doesn't wash the whole frame in bloom
+        beamFrom.copy(targetPos).sub(muzzle).normalize().multiplyScalar(0.6).add(muzzle);
+        if (!beam || beamMode !== mode) {
+          if (beam) beam.off();
+          beam = fx.miningBeam(beamFrom, targetPos, BEAM_COLORS[mode]);
+          beamMode = mode;
+        }
+        beam.set(beamFrom, targetPos);
+        sparkTimer -= dt;
+        if (sparkTimer <= 0) {
+          fx.sparks(targetPos, new THREE.Vector3(0, 1, 0.4).normalize(), BEAM_COLORS[mode]);
+          sparkTimer = 0.5;
+        }
+      } else if (beam) {
+        beam.off(); beam = null; beamMode = null;
+      }
+      if (firing && mode === 'bolt') {
+        boltTimer -= dt;
+        if (boltTimer <= 0) {
+          boltDir.copy(targetPos).sub(muzzle).normalize();
+          fx.laserBolt(muzzle, boltDir, 55, 0x7de8ff);
+          boltTimer = 0.14;
+          sparkTimer -= 1;
+          if (sparkTimer <= 0) {
+            fx.sparks(targetPos, new THREE.Vector3(0, 0.6, 1).normalize(), 0x7de8ff);
+            sparkTimer = 2;
+          }
+        }
+      }
+
+      fx.update(dt);
+
+      // subtle look-around so the scene feels alive
+      camera.rotation.y = Math.sin(t * 0.15) * 0.06;
+      camera.rotation.x = Math.sin(t * 0.21) * 0.02;
+
+      label.textContent = `arcforge · mode: ${mode}${firing ? ' · firing' : ''}`;
+
+      engine.render();
+      if (!ready) { ready = true; window.__AMS__ = { ready: true }; }
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

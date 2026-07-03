@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>underwater — basin test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128032;</text></svg>">
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #game-canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <script type="module">
+    import * as THREE from 'three';
+    import { Engine } from '/src/core/engine.js';
+    import { RNG, hash32, hashString } from '/src/core/rng.js';
+    import { SimplexNoise } from '/src/core/noise.js';
+    import { UnderwaterSystem } from '/src/render/underwater.js';
+
+    const params = new URLSearchParams(location.search);
+    const above = params.get('above') === '1';
+    const seed = Number(params.get('seed') || 1337);
+
+    // ---- contract-exact ocean PlanetDef mock -------------------------------
+    const planetDef = {
+      id: 'test:lagoon', seed, name: 'Lagoon', biome: 'ocean',
+      seaLevel: 0.3, floraDensity: 0.85, faunaDensity: 0.75,
+      palette: {
+        deepWater: '#0e3358', shallowWater: '#2a9fb4', shore: '#e8d8a8',
+        low: '#7aa05a', mid: '#94b46a', high: '#cfd8b8', peak: '#f4f8ec',
+        cliff: '#6f6252', accent: '#ffb454', glow: '#7de8ff',
+      },
+    };
+
+    // ---- mock TerrainField: island basin, sea at y=8, bowl dipping ~14 m ---
+    class BasinField {
+      constructor(s) {
+        this.seed = s;
+        this.n = new SimplexNoise(s);
+        this.m = new SimplexNoise(s ^ 0x5f5f);
+      }
+      get seaY() { return 8; }
+      height(x, z) {
+        const d2 = x * x + z * z;
+        let h = 12 - 16 * Math.exp(-d2 / (110 * 110));      // bowl: −4 at center
+        h += 1.6 * this.n.fbm2(x * 0.02, z * 0.02, 3);       // dips to depth ~14
+        h += 0.4 * this.n.noise2D(x * 0.09, z * 0.09);
+        return h;
+      }
+      normal(x, z, eps = 1) {
+        return new THREE.Vector3(
+          this.height(x - eps, z) - this.height(x + eps, z), 2 * eps,
+          this.height(x, z - eps) - this.height(x, z + eps)).normalize();
+      }
+      moisture(x, z) { return 0.55 + 0.45 * this.m.fbm2(x * 0.004 + 9, z * 0.004 - 5, 3); }
+      cellRng(cx, cz, salt = 0) {
+        const s = typeof salt === 'string' ? hashString(salt) : salt | 0;
+        return new RNG(hash32(this.seed, cx | 0, cz | 0, s));
+      }
+    }
+    const field = new BasinField(seed);
+    const seaY = field.seaY;
+
+    // ---- scene / engine ----------------------------------------------------
+    const canvas = document.getElementById('game-canvas');
+    const engine = new Engine(canvas);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(64, innerWidth / innerHeight, 0.1, 6000);
+
+    // surface fog rewritten every frame below (simulates the SkyDome), so the
+    // underwater override-ordering contract is actually exercised
+    const SURFACE_FOG_COLOR = 0xbcd6e8, SURFACE_FOG_DENSITY = 0.0012;
+    scene.fog = new THREE.FogExp2(SURFACE_FOG_COLOR, SURFACE_FOG_DENSITY);
+
+    // lighting: high sun + sky fill
+    const sun = new THREE.DirectionalLight(0xfff4e0, 2.6);
+    sun.position.set(120, 300, 80);
+    scene.add(sun, sun.target);
+    scene.add(new THREE.HemisphereLight(0x9fc8e8, 0x3a4a3a, 0.85));
+
+    // simple gradient sky dome for the above-water shot
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false, fog: false,
+      vertexShader: `varying vec3 vDir;
+        void main() { vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `varying vec3 vDir;
+        void main() {
+          float h = clamp(vDir.y * 1.3, 0.0, 1.0);
+          vec3 col = mix(vec3(0.74, 0.84, 0.91), vec3(0.25, 0.5, 0.86), pow(h, 0.6));
+          gl_FragColor = vec4(col, 1.0);
+        }`,
+    });
+    const skyDome = new THREE.Mesh(new THREE.SphereGeometry(2800, 24, 16), skyMat);
+    skyDome.renderOrder = -100; // same slot as the real SkyDome
+    scene.add(skyDome);
+
+    // ---- vertex-colored seafloor / island mesh sampled from the field ------
+    const SIZE = 560, SEG = 170;
+    const gGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+    gGeo.rotateX(-Math.PI / 2);
+    const gp = gGeo.attributes.position;
+    const gCol = new Float32Array(gp.count * 3);
+    const pal = {};
+    for (const k in planetDef.palette) pal[k] = new THREE.Color(planetDef.palette[k]);
+    const c = new THREE.Color();
+    for (let i = 0; i < gp.count; i++) {
+      const x = gp.getX(i), z = gp.getZ(i);
+      const y = field.height(x, z);
+      gp.setY(i, y);
+      if (y < seaY) {
+        const d01 = THREE.MathUtils.clamp((seaY - y) / 15, 0, 1);
+        c.copy(pal.shore).lerp(pal.shallowWater, 0.35 + 0.45 * d01).lerp(pal.deepWater, d01 * 0.85);
+      } else {
+        c.copy(pal.shore).lerp(pal.low, THREE.MathUtils.clamp((y - seaY) / 3, 0, 1));
+        c.lerp(pal.mid, THREE.MathUtils.clamp((y - seaY - 2) / 4, 0, 1) * 0.7);
+      }
+      gCol[i * 3] = c.r; gCol[i * 3 + 1] = c.g; gCol[i * 3 + 2] = c.b;
+    }
+    gGeo.setAttribute('color', new THREE.BufferAttribute(gCol, 3));
+    gGeo.computeVertexNormals();
+    scene.add(new THREE.Mesh(gGeo,
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 })));
+
+    // translucent sea plane at y = 8 (oversized so no edge shows in the fog)
+    const sea = new THREE.Mesh(
+      new THREE.PlaneGeometry(2400, 2400),
+      new THREE.MeshStandardMaterial({
+        color: pal.shallowWater, transparent: true, opacity: 0.55,
+        roughness: 0.15, metalness: 0.25, side: THREE.DoubleSide, depthWrite: false,
+      }));
+    sea.rotation.x = -Math.PI / 2;
+    sea.position.y = seaY;
+    scene.add(sea);
+
+    // ---- THE MODULE --------------------------------------------------------
+    const underwater = new UnderwaterSystem(scene, planetDef, field);
+
+    // ---- camera: underwater at depth 6 looking across the basin ------------
+    const player = new THREE.Vector3(-55, seaY - 6, 0);
+    if (above) {
+      camera.position.set(-120, 26, -85);
+      camera.lookAt(0, seaY - 2, 0);
+      player.copy(camera.position);
+    } else {
+      camera.position.copy(player);
+      // prime the system once, then compose on the nearest live fish school
+      underwater.update(1 / 60, camera.position, player);
+      let tx = 30, tz = 10; // fallback: basin center-ish
+      let bestD = Infinity;
+      for (const s of underwater._schools ?? []) {
+        if (!s.active) continue;
+        // predict the drifting anchor around screenshot time (~5 s in)
+        const tp = 5;
+        const ax = s.bx + Math.sin(tp * 0.073 + s.ph1) * 8 + Math.sin(tp * 0.029 + s.ph2) * 4;
+        const az = s.bz + Math.cos(tp * 0.061 + s.ph2) * 8 + Math.sin(tp * 0.041 + s.ph1) * 4;
+        const d = Math.hypot(ax - player.x, az - player.z);
+        if (d < bestD) { bestD = d; tx = ax; tz = az; }
+      }
+      if (bestD < Infinity && bestD > 15) {
+        // step toward the school so it sits well inside the fog's sight range
+        const k = (bestD - 13) / bestD;
+        player.set(player.x + (tx - player.x) * k, seaY - 6, player.z + (tz - player.z) * k);
+        camera.position.copy(player);
+      }
+      camera.lookAt(tx, seaY - 6.8, tz);
+    }
+
+    engine.setScene(scene, camera, { bloomStrength: 0.55, bloomRadius: 0.6, bloomThreshold: 0.85 });
+    engine.setExposure(1.1);
+
+    // ---- loop ---------------------------------------------------------------
+    let t = 0, frames = 0;
+    const baseQuat = camera.quaternion.clone();
+    const sway = new THREE.Quaternion();
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    function frame() {
+      const dt = engine.tick();
+      t += dt;
+      // simulate SkyDome: rewrite surface fog EVERY frame…
+      scene.fog.color.setHex(SURFACE_FOG_COLOR);
+      scene.fog.density = SURFACE_FOG_DENSITY;
+      // …then the underwater system runs after and must win while submerged
+      underwater.update(dt, camera.position, player);
+      sway.setFromAxisAngle(yAxis, Math.sin(t * 0.1) * 0.02);
+      camera.quaternion.copy(sway).multiply(baseQuat);
+      engine.render();
+      frames++;
+      if (frames === 1) {
+        window.__AMS__ = { ready: true };
+        window.__DBG__ = { scene, camera, underwater, field, player };
+      }
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

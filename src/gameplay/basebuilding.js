@@ -3,28 +3,40 @@
 //
 // CONTRACT: new BaseBuilder(scene, field, gameState, systemId, planetIndex)
 //   .update(dt, camera, player)   .active (build mode flag)   .dispose()
-// B toggles build mode · 1-8 select piece · R rotate · LMB place · RMB remove
+// B toggles build mode · 1-9 select piece · R rotate · LMB place · RMB remove
+// Machine pieces (refiner/planter) are registered with gameplay/machines.js on
+// materialize and unregistered on remove; their recs carry extra persisted
+// state (job/output/crop) beyond {kind,x,y,z,rotY}.
 import * as THREE from 'three';
 import { input } from '../core/input.js';
 import { events } from '../core/events.js';
 import { ITEMS } from './items.js';
 import { audio } from '../audio/audio.js';
+import { registerMachine, unregisterMachine } from './machines.js';
 
 const GRID = 4;
 const _v1 = new THREE.Vector3();
 
 const ALLOY = 0x9aa7b0, ALLOY_DARK = 0x5b6670, GLASS = 0xbfefff, STRIP = new THREE.Color(1.2, 2.6, 3.0);
 
-export const PIECES = [
+export const PIECES = [ // ≤ 9 entries — BuildUI binds them to keys 1-9
   { kind: 'foundation', name: 'Foundation', cost: [['ferrox', 4]] },
   { kind: 'wall',       name: 'Wall',       cost: [['ferrox', 3], ['carbyne', 1]] },
-  { kind: 'window',     name: 'Window Wall', cost: [['ferrox', 2], ['luminglass', 1]] },
   { kind: 'door',       name: 'Doorway',    cost: [['ferrox', 3]] },
   { kind: 'roof',       name: 'Roof',       cost: [['ferrox', 3]] },
   { kind: 'light',      name: 'Light Mast', cost: [['ferrox', 1], ['voltglass', 1]] },
   { kind: 'storage',    name: 'Storage Crate', cost: [['ferroweave', 2]] },
+  { kind: 'refiner',    name: 'Refiner',    cost: [['ferrox', 5], ['voltglass', 1]] },
+  { kind: 'planter',    name: 'Bio Planter', cost: [['ferrox', 2], ['carbyne', 4]] },
   { kind: 'pad',        name: 'Landing Pad', cost: [['ferrox', 6], ['silica', 2]] },
 ];
+
+// kinds retired from the build bar but still materialized/reclaimed for old saves
+const LEGACY_PIECES = {
+  window: { kind: 'window', name: 'Window Wall', cost: [['ferrox', 2], ['luminglass', 1]] },
+};
+
+const MACHINE_KINDS = new Set(['refiner', 'planter']);
 
 let _matAlloy, _matDark, _matGlass, _matStrip;
 function mats() {
@@ -93,6 +105,74 @@ export function buildPiece(kind, withLight = true) {
       box(1.3, 1.1, 1.3, alloy, 0, 0.55, 0);
       box(1.34, 0.12, 1.34, strip, 0, 0.62, 0);
       break;
+    case 'refiner': {
+      // squat cylinder furnace: plinth, riveted body, hopper, side pipes,
+      // and an HDR ember slot ('machine-glow') animated by MachineRunner
+      const cyl = (rt, rb, h, m, x, y, z, seg = 16) => {
+        const mesh = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), m);
+        mesh.position.set(x, y, z);
+        mesh.castShadow = mesh.receiveShadow = true;
+        g.add(mesh);
+        return mesh;
+      };
+      cyl(1.02, 1.14, 0.22, dark, 0, 0.11, 0);              // plinth
+      cyl(0.8, 0.92, 1.18, alloy, 0, 0.79, 0);              // body
+      cyl(0.86, 0.86, 0.1, dark, 0, 1.42, 0);               // collar
+      cyl(0.56, 0.22, 0.52, alloy, 0, 1.76, 0, 12);         // hopper funnel
+      cyl(0.6, 0.56, 0.07, dark, 0, 2.04, 0, 12);           // hopper rim
+      box(0.6, 0.09, 0.6, strip, 0, 1.48, 0);               // collar light band
+      // ember slot — fresh HDR material so each furnace animates independently
+      box(0.72, 0.52, 0.18, dark, 0, 0.56, 0.78);           // slot frame
+      const ember = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.3, 0.08),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(3.1, 1.15, 0.28) }));
+      ember.name = 'machine-glow';
+      ember.position.set(0, 0.56, 0.86);
+      g.add(ember);
+      // side pipes with elbows into the body
+      for (const sx of [-1, 1]) {
+        const pipe = cyl(0.085, 0.085, 1.15, dark, sx * 1.02, 0.72, 0, 8);
+        pipe.castShadow = false;
+        const elbow = box(0.26, 0.17, 0.17, dark, sx * 0.88, 1.24, 0);
+        elbow.castShadow = false;
+        cyl(0.11, 0.11, 0.1, alloy, sx * 1.02, 0.2, 0, 8);  // pipe foot
+      }
+      if (withLight) {
+        const pt = new THREE.PointLight(0xff7a2a, 14, 10, 1.8);
+        pt.name = 'machine-light';
+        pt.position.set(0, 0.68, 1.1);
+        g.add(pt);
+      }
+      break;
+    }
+    case 'planter': {
+      // raised hydroponic tray: legs, rim walls, moist dark soil, cyan rim
+      // strips; 'machine-crop' group hosts procedural sprouts (machines.js)
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) box(0.12, 0.44, 0.12, dark, sx * 0.86, 0.22, sz * 0.5);
+      }
+      box(1.96, 0.08, 1.24, dark, 0, 0.46, 0);              // tray bottom
+      box(2.04, 0.3, 0.1, alloy, 0, 0.6, 0.62);             // rim walls
+      box(2.04, 0.3, 0.1, alloy, 0, 0.6, -0.62);
+      box(0.1, 0.3, 1.34, alloy, 0.97, 0.6, 0);
+      box(0.1, 0.3, 1.34, alloy, -0.97, 0.6, 0);
+      const soil = new THREE.Mesh(
+        new THREE.BoxGeometry(1.84, 0.16, 1.12),
+        new THREE.MeshStandardMaterial({ color: 0x221710, roughness: 1, metalness: 0 }));
+      soil.position.set(0, 0.56, 0);
+      soil.receiveShadow = true;
+      g.add(soil);
+      // rim light strips
+      box(1.9, 0.05, 0.05, strip, 0, 0.77, 0.62);
+      box(1.9, 0.05, 0.05, strip, 0, 0.77, -0.62);
+      box(0.05, 0.05, 1.26, strip, 0.97, 0.77, 0);
+      box(0.05, 0.05, 1.26, strip, -0.97, 0.77, 0);
+      const cropG = new THREE.Group();
+      cropG.name = 'machine-crop';
+      cropG.position.set(0, 0.64, 0);
+      g.add(cropG);
+      break;
+    }
     case 'pad': {
       const padMesh = new THREE.Mesh(new THREE.CylinderGeometry(4.4, 4.7, 0.4, 8), dark);
       padMesh.position.y = 0.2;
@@ -140,6 +220,9 @@ export class BaseBuilder {
     mesh.rotation.y = rec.rotY ?? 0;
     this.scene.add(mesh);
     this.placed.push({ kind: rec.kind, mesh, rec });
+    // machines register with the runner; the rec object is shared by
+    // reference so job/output/crop state persists through gs.bases
+    if (MACHINE_KINDS.has(rec.kind)) registerMachine({ rec, mesh, gs: this.gs });
   }
 
   _ensureGhost(kind) {
@@ -279,7 +362,9 @@ export class BaseBuilder {
         if (d < bestD) { bestD = d; best = p; }
       }
       if (best) {
-        const def = PIECES.find((x) => x.kind === best.kind);
+        const def = PIECES.find((x) => x.kind === best.kind) ?? LEGACY_PIECES[best.kind];
+        if (!def) return;
+        if (MACHINE_KINDS.has(best.kind)) unregisterMachine(best.rec);
         for (const [id, qty] of def.cost) this.gs.addItem(id, Math.ceil(qty / 2));
         this.scene.remove(best.mesh);
         this.placed.splice(this.placed.indexOf(best), 1);
@@ -293,7 +378,10 @@ export class BaseBuilder {
 
   dispose() {
     this._removeGhost();
-    for (const p of this.placed) this.scene.remove(p.mesh);
+    for (const p of this.placed) {
+      if (MACHINE_KINDS.has(p.kind)) unregisterMachine(p.rec);
+      this.scene.remove(p.mesh);
+    }
     this.placed.length = 0;
   }
 }
