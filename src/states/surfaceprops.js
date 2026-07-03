@@ -6,6 +6,7 @@ import {
   createRuin, createBeacon, createOutpost, createCrashedShip,
   createResourceNode, createLandingPad,
 } from '../render/props.js';
+import { createKnowledgeStone } from '../render/knowledgestone.js';
 import { ruinLore } from '../universe/lore.js';
 
 const CELL = 256;
@@ -35,6 +36,7 @@ export class PropManager {
       if (!want.has(key)) {
         for (const p of cell.props) {
           this.scene.remove(p.object3d);
+          p.dispose?.();
           this.all.splice(this.all.indexOf(p), 1);
         }
         this.cells.delete(key);
@@ -90,8 +92,17 @@ export class PropManager {
     if (rng.chance(0.035)) {
       place(createCrashedShip(rng.fork('crash')), { kind: 'crash', salvaged: false });
     }
+    // Luminel knowledge stones — teach a word when touched
+    if (rng.chance(0.12)) {
+      place(createKnowledgeStone(rng.fork('stone')), { kind: 'stone' });
+    }
 
     this.cells.set(key, { props });
+  }
+
+  /** advance any props with a pulse/animation (knowledge stones, etc.) */
+  animate(dt) {
+    for (const p of this.all) p.update?.(dt);
   }
 
   /** nearest interactable prop within range of pos */
@@ -117,7 +128,7 @@ export class PropManager {
   }
 
   dispose() {
-    for (const p of this.all) this.scene.remove(p.object3d);
+    for (const p of this.all) { this.scene.remove(p.object3d); p.dispose?.(); }
     this.all.length = 0;
     this.cells.clear();
   }

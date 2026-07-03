@@ -21,6 +21,7 @@ import { PropManager } from './surfaceprops.js';
 import { Survival } from '../gameplay/survival.js';
 import { GroundMining } from '../gameplay/mining.js';
 import { Scanner } from '../gameplay/scanner.js';
+import { Language } from '../gameplay/language.js';
 import { GroundCombat } from '../gameplay/combat.js';
 import { BaseBuilder } from '../gameplay/basebuilding.js';
 import { WeatherSystem } from '../render/weather.js';
@@ -129,6 +130,7 @@ export class SurfaceState {
     this.survival = new Survival(gs);
     this.mining = new GroundMining(this.scene, this.effects, gs, this);
     this.scanner = new Scanner(gs);
+    this.language = new Language(gs);
     this.combat = new GroundCombat(this.scene, this.effects, gs, this);
     this.builder = new BaseBuilder(this.scene, this.field, gs, this.systemId, this.planetIndex);
     this.machines = new MachineRunner(gs);
@@ -268,6 +270,7 @@ export class SurfaceState {
     this.flora.update(dt, focus);
     this.creatures.update(dt, inShip ? this.shipObj.group.position : this.player.position);
     this.props.update(focus);
+    this.props.animate(dt);
     this.effects.update(dt);
     this.weather.update(dt, inShip ? this.shipObj.group.position : this.player.position, sunElev);
 
@@ -465,6 +468,9 @@ export class SurfaceState {
         if (prop.kind === 'ruin' || prop.kind === 'beacon') {
           label = `F — COMMUNE WITH ${prop.kind === 'ruin' ? 'LUMINEL RUIN' : 'BEACON'}`;
           if (input.actionPressed('interact')) this._commune(prop);
+        } else if (prop.kind === 'stone') {
+          label = 'F — TOUCH KNOWLEDGE STONE';
+          if (input.actionPressed('interact')) this._touchStone(prop);
         } else if (prop.kind === 'crash' && !prop.salvaged) {
           label = 'F — SALVAGE WRECK';
           if (input.actionPressed('interact')) this._salvage(prop);
@@ -489,7 +495,8 @@ export class SurfaceState {
     const gs = this.ctx.gameState;
     audio.sfx('discovery');
     const lore = prop.lore ?? { title: 'Silent Stone', text: 'The glyphs have faded beyond reading.' };
-    events.emit('lore:show', lore);
+    // the inscription is Luminel — render it through your vocabulary
+    events.emit('lore:show', { title: lore.title, text: this.language.gloss(lore.text), glyphs: true });
     const key = `${this.def.id}:${Math.round(prop.position.x)}:${Math.round(prop.position.z)}`;
     if (gs.discover('ruins', key, lore.title, 180)) {
       if (Math.random() < 0.35) {
@@ -497,6 +504,13 @@ export class SurfaceState {
         events.emit('notify', { text: '+1 Luminel Shard', tone: 'good' });
       }
     }
+  }
+
+  _touchStone(prop) {
+    if (prop.taught) { events.emit('notify', { text: 'THIS STONE HAS ALREADY SPOKEN', tone: 'info' }); return; }
+    prop.taught = true;
+    this.language.learnRandom();   // emits its own notify + sfx
+    this.effects.sparks?.(prop.position.clone().add(new THREE.Vector3(0, 1, 0)), new THREE.Vector3(0, 1, 0), '#7de8ff');
   }
 
   _salvage(prop) {

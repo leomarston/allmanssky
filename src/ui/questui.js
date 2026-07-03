@@ -44,6 +44,13 @@ export class QuestUI {
 
   showLore(lore) {
     this.root?.remove();
+    // untranslated Luminel words render in this glyph style
+    if (!document.getElementById('ams-lum-style')) {
+      const st = document.createElement('style');
+      st.id = 'ams-lum-style';
+      st.textContent = '.lum-unknown{font-style:italic;letter-spacing:.06em;color:#7de8ff;opacity:.82;}';
+      document.head.appendChild(st);
+    }
     const r = document.createElement('div');
     r.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,4,10,.72);backdrop-filter:blur(6px);z-index:45;animation:ams-flicker-in .5s;';
     r.innerHTML = `<div style="max-width:580px;background:rgba(10,14,26,.94);border:1px solid rgba(255,255,255,.28);padding:38px 46px;color:#e8ecff;font-family:Georgia,'Times New Roman',serif;text-align:center;box-shadow:0 0 60px rgba(125,232,255,.12);">
