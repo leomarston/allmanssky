@@ -40,6 +40,7 @@ export class GameState {
     this.discoveries = { systems: {}, planets: {}, creatures: {}, flora: {}, ruins: {} };
     this.quests = { active: [], completed: [], vesperDepth: 0, vesperTarget: null };
     this.bases = [];                   // [{systemId, planetIndex, pieces:[{kind,x,y,z,rotY}]}]
+    this.digs = {};                    // planetId → [[x,z,r,d]] terrain excavations
     this.stats = { warps: 0, planetsVisited: 0, creaturesScanned: 0, distanceOnFoot: 0 };
   }
 

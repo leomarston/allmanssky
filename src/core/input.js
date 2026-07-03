@@ -7,7 +7,7 @@ const KEYMAP = {
   boost: ['ShiftLeft'], rollLeft: ['KeyQ'], rollRight: ['KeyE'],
   interact: ['KeyF'], jump: ['Space'], sprint: ['ShiftLeft'],
   inventory: ['Tab', 'KeyI'], map: ['KeyM'], build: ['KeyB'],
-  scan: ['KeyV'], photo: ['KeyP'], land: ['KeyG'], warp: ['KeyJ'],
+  scan: ['KeyV'], photo: ['KeyP'], land: ['KeyG'], warp: ['KeyJ'], pulse: ['KeyX'],
   torch: ['KeyT'], escape: ['Escape'], swapWeapon: ['KeyR'],
 };
 

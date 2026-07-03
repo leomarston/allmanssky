@@ -24,7 +24,9 @@ export class GroundMining {
   }
 
   update(dt, camera, surface) {
-    const firing = input.mouseDown[0] && this.gs.tool.mode === 'mine' && input.aiming;
+    const mode = this.gs.tool.mode;
+    if (mode === 'dig') { this._updateDig(dt, camera, surface); return; }
+    const firing = input.mouseDown[0] && mode === 'mine' && input.aiming;
     if (!firing) { this._stopBeam(); return; }
 
     const origin = camera.position.clone();
@@ -82,6 +84,52 @@ export class GroundMining {
         events.emit('resource:mined', { id: flora.itemId ?? 'carbyne', amount: qty });
         events.emit('notify', { text: `+${qty} ${ITEMS[flora.itemId ?? 'carbyne'].name}`, tone: 'good' });
         audio.sfx('collect');
+      }
+    }
+  }
+
+  /** Arcforge excavator: carve smooth bowls into the terrain itself. */
+  _updateDig(dt, camera, surface) {
+    const firing = input.mouseDown[0] && input.aiming;
+    if (!firing) { this._stopBeam(); return; }
+
+    // march the aim ray until it crosses the heightfield
+    const origin = camera.position.clone();
+    const dir = camera.getWorldDirection(new THREE.Vector3());
+    let hit = null;
+    const p = origin.clone();
+    for (let i = 0; i < 60; i++) {
+      p.addScaledVector(dir, 0.5);
+      if (p.y <= surface.field.height(p.x, p.z)) { hit = p; break; }
+      if (origin.distanceTo(p) > REACH) break;
+    }
+    const from = origin.clone().addScaledVector(dir, 0.8).add(new THREE.Vector3(0, -0.35, 0));
+    const endPos = hit ?? origin.clone().addScaledVector(dir, REACH);
+    if (!this.beam) { this.beam = this.effects.miningBeam?.(from, endPos, '#7dff8a'); audio.sfx('mine'); }
+    else this.beam.set?.(from, endPos);
+    if (!hit) return;
+
+    this._mineTick += dt * (1 + (this.gs.upgrades.toolMine ?? 0) * 0.5);
+    if (this._mineTick >= 0.35) {
+      this._mineTick = 0;
+      const R = 2.8, D = 1.05;
+      if (!surface.field.addDig(hit.x, hit.z, R, D)) {
+        events.emit('notify', { text: 'GROUND TOO UNSTABLE FOR FURTHER EXCAVATION', tone: 'warn' });
+        return;
+      }
+      surface.terrain.invalidateArea(hit.x, hit.z, R + 1);
+      this.gs.digs ??= {};
+      (this.gs.digs[surface.def.id] ??= []).push([
+        Math.round(hit.x * 10) / 10, Math.round(hit.z * 10) / 10, R, D,
+      ]);
+      this.effects.landingDust?.(hit.clone());
+      audio.sfx('mineHit', { volume: 0.7 });
+      if (Math.random() < 0.3) {
+        const id = Math.random() < 0.6 ? 'ferrox' : 'silica';
+        if (this.gs.addItem(id, 1) > 0) {
+          events.emit('resource:mined', { id, amount: 1 });
+          events.emit('notify', { text: `+1 ${ITEMS[id].name}`, tone: 'good' });
+        }
       }
     }
   }

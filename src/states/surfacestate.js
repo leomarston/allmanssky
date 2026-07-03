@@ -24,6 +24,7 @@ import { Scanner } from '../gameplay/scanner.js';
 import { GroundCombat } from '../gameplay/combat.js';
 import { BaseBuilder } from '../gameplay/basebuilding.js';
 import { WeatherSystem } from '../render/weather.js';
+import { SkyBodies } from '../render/skybodies.js';
 import { audio } from '../audio/audio.js';
 
 const BOARD_RANGE = 6;
@@ -57,6 +58,7 @@ export class SurfaceState {
     this.camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.08, 24000);
 
     this.field = new TerrainField(this.def);
+    this.field.loadDigs(gs.digs?.[this.def.id]);   // restore excavations
     this.sky = new SkyDome(this.scene, this.def);
     if (this.sky.light) this.scene.add(this.sky.light);
     if (this.sky.ambient) this.scene.add(this.sky.ambient);
@@ -66,6 +68,7 @@ export class SurfaceState {
     this.props = new PropManager(this.scene, this.def, this.field);
     this.effects = new EffectsSystem(this.scene);
     this.weather = new WeatherSystem(this.scene, this.def, this.def.seed);
+    this.skyBodies = new SkyBodies(this.scene, this.system, this.planetIndex);
 
     // ship — parked or inbound depending on how we arrived
     const lp = gs.location.landingPos;
@@ -223,6 +226,7 @@ export class SurfaceState {
     this.timeOfDay = (this.timeOfDay + dt / this.def.dayLength) % 1;
     const sunElev = Math.sin(this.timeOfDay * Math.PI * 2);
     this.sky.update(dt, sunElev, this.camera.position);
+    this.skyBodies.update(dt, this.camera.position, sunElev, this.timeOfDay);
     // thin the fog with altitude so the ground reads from the air
     if (this.scene.fog && this.mode !== 'foot') {
       const agl = Math.max(0, this.shipAGL);
@@ -289,9 +293,11 @@ export class SurfaceState {
     }
     if (input.actionPressed('scan')) this.scanner.scan(this);
     if (input.actionPressed('swapWeapon') && !this.builder.active) {
-      gs.tool.mode = gs.tool.mode === 'mine' ? 'bolt' : 'mine';
+      const cycle = { mine: 'bolt', bolt: 'dig', dig: 'mine' };
+      gs.tool.mode = cycle[gs.tool.mode] ?? 'mine';
       audio.sfx('click');
-      events.emit('notify', { text: `ARCFORGE MODE: ${gs.tool.mode === 'mine' ? 'MINING BEAM' : 'BOLT CASTER'}`, tone: 'info' });
+      const labels = { mine: 'MINING BEAM', bolt: 'BOLT CASTER', dig: 'EXCAVATOR' };
+      events.emit('notify', { text: `ARCFORGE MODE: ${labels[gs.tool.mode]}`, tone: 'info' });
     }
     this._interactions();
   }
@@ -488,6 +494,7 @@ export class SurfaceState {
       gs.location.mode = 'surface';
     }
     this.trail?.dispose?.();
+    this.skyBodies?.dispose?.();
     this.terrain?.dispose?.();
     this.weather?.dispose?.();
     this.sky?.dispose?.();

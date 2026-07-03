@@ -478,6 +478,26 @@ export class TerrainRenderer {
     this._queue = wanted;
   }
 
+  /**
+   * The heightfield changed inside this circle (Arcforge dig) — rebuild the
+   * chunks that overlap it, front of the queue, same LODs.
+   */
+  invalidateArea(x, z, r) {
+    const c0x = Math.floor((x - r) / CHUNK), c1x = Math.floor((x + r) / CHUNK);
+    const c0z = Math.floor((z - r) / CHUNK), c1z = Math.floor((z + r) / CHUNK);
+    const jobs = [];
+    for (let cz = c0z; cz <= c1z; cz++) {
+      for (let cx = c0x; cx <= c1x; cx++) {
+        const key = cx + ',' + cz;
+        const cur = this.chunks.get(key);
+        if (!cur) continue;
+        if (this._queue.some((j) => j.key === key)) continue;
+        jobs.push({ cx, cz, lod: cur.lod, d: 0, key });
+      }
+    }
+    this._queue.unshift(...jobs);
+  }
+
   _processQueue(budgetMs) {
     const t0 = performance.now();
     while (this._queue.length) {

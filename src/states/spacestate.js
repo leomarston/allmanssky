@@ -177,6 +177,7 @@ export class SpaceState {
     const gs = ctx.gameState;
     this._elapsed += dt;
 
+    this._updatePulse(dt);
     this.shipCtl.update(dt, this.camera);
     this.starfield.update?.(dt);
     this.nebula.update?.(dt);
@@ -185,6 +186,7 @@ export class SpaceState {
 
     for (const p of this.planets) {
       const sunDir = p.visual.group.position.clone().negate().normalize();
+      p.visual.group.rotation.y += dt * 0.008; // planets turn, slowly
       p.visual.update?.(dt, this.camera.position, sunDir);
     }
     this.effects.update(dt);
@@ -197,6 +199,47 @@ export class SpaceState {
     // after _interactions so anomaly prompts can claim the interact label
     this.life.update(dt, this.shipCtl.position);
     this._hud(dt);
+  }
+
+  /**
+   * Pulse drive: hold X to fold in-system distance. Speed ramps to ~14x with
+   * star-streak visuals; auto-drops near planets/stations so you can't overshoot
+   * into terrain, and burns a trickle of Pyrene.
+   */
+  _updatePulse(dt) {
+    const gs = this.ctx.gameState;
+    const wantPulse = input.action('pulse') && !this._warping
+      && this.shipCtl.throttle > 0.2 && gs.ship.fuel > 0.01;
+    const { dist } = this._nearestPlanet();
+    const nearMass = dist < 260
+      || (this.station && this.shipCtl.position.distanceTo(this.station.group.position) < 200);
+
+    if (wantPulse && !nearMass) {
+      if (!this._pulsing) {
+        this._pulsing = true;
+        this._pulseFx = this.effects.warpTunnel?.(this.camera) ?? null;
+        audio.sfx('takeoff', { volume: 0.5 });
+        events.emit('notify', { text: 'PULSE DRIVE ENGAGED', tone: 'info' });
+      }
+      this._pulseLevel = Math.min(1, (this._pulseLevel ?? 0) + dt * 0.7);
+      gs.ship.fuel = Math.max(0, gs.ship.fuel - dt * 0.004);
+    } else if (this._pulsing) {
+      this._pulseLevel = Math.max(0, (this._pulseLevel ?? 0) - dt * 2.5);
+      if (this._pulseLevel <= 0) {
+        this._pulsing = false;
+        this._pulseFx?.dispose?.();
+        this._pulseFx = null;
+        if (nearMass) events.emit('notify', { text: 'PULSE DROP — mass proximity', tone: 'info' });
+        this.shipCtl.shake(0.5);
+      }
+    }
+    const lvl = this._pulseLevel ?? 0;
+    if (lvl > 0) {
+      this._pulseFx?.setLevel?.(lvl * 0.75);
+      // extra velocity along the nose on top of the flight model
+      this.shipCtl.position.addScaledVector(this.shipCtl.forward, 720 * lvl * lvl * dt);
+      this.shipCtl.shake(lvl * 0.12);
+    }
   }
 
   _nearestPlanet() {
@@ -218,6 +261,8 @@ export class SpaceState {
     if (planet && dist < planet.def.radius * LAND_RANGE) {
       interact = `G — ENTER ATMOSPHERE OF ${planet.def.name.toUpperCase()}`;
       if (input.actionPressed('land')) return this._land(planet);
+    } else if (planet && dist > 500 && !this._pulsing && this.shipCtl.throttle > 0.2) {
+      interact = 'HOLD X — PULSE DRIVE';
     }
     if (this.station) {
       const dockWorld = this.station.dockPos
@@ -326,6 +371,7 @@ export class SpaceState {
     if (!this._warping) gs.location.pos = this.shipCtl.position.toArray();
     gs.location.mode = 'space';
     this.trail?.dispose?.();
+    this._pulseFx?.dispose?.();
     this.effects?.dispose?.();
     this.mining?.dispose?.();
     this.combat?.dispose?.();

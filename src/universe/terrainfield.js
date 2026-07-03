@@ -58,6 +58,11 @@ export class TerrainField {
     this._nMoist = new SimplexNoise(hash32(this.seed, 104));
     this._nCanyon = new SimplexNoise(hash32(this.seed, 105));
 
+    // player terrain edits (Arcforge dig mode): smooth bowls subtracted from
+    // the base field. Indexed by 32 m cell; zero cost while empty.
+    this._digs = [];
+    this._digIndex = new Map();
+
     // Sea plane: def.seaLevel is the fraction of the height distribution that
     // sits below water. Estimate the quantile from a deterministic sample grid.
     this._seaY = -Infinity;
@@ -123,7 +128,51 @@ export class TerrainField {
 
     // craters: bowl + rim stamps on a deterministic cell grid
     if (this.craterAmt > 0.005) h += this._craterAt(x, z);
+
+    // player excavations
+    if (this._digs.length) h += this._digAt(x, z);
     return h;
+  }
+
+  /**
+   * Carve a smooth bowl (Arcforge dig mode). Capped so save files stay sane.
+   * @returns {boolean} false when the per-planet edit budget is exhausted
+   */
+  addDig(x, z, r, d) {
+    if (this._digs.length >= 400) return false;
+    const idx = this._digs.length;
+    this._digs.push({ x, z, r, d });
+    const c0x = Math.floor((x - r) / 32), c1x = Math.floor((x + r) / 32);
+    const c0z = Math.floor((z - r) / 32), c1z = Math.floor((z + r) / 32);
+    for (let cz = c0z; cz <= c1z; cz++) {
+      for (let cx = c0x; cx <= c1x; cx++) {
+        const k = cx + ':' + cz;
+        let a = this._digIndex.get(k);
+        if (!a) this._digIndex.set(k, a = []);
+        a.push(idx);
+      }
+    }
+    return true;
+  }
+
+  /** restore persisted excavations: [[x,z,r,d], ...] */
+  loadDigs(arr) {
+    for (const [x, z, r, d] of arr ?? []) this.addDig(x, z, r, d);
+  }
+
+  _digAt(x, z) {
+    const a = this._digIndex.get(Math.floor(x / 32) + ':' + Math.floor(z / 32));
+    if (!a) return 0;
+    let dh = 0;
+    for (let i = 0; i < a.length; i++) {
+      const m = this._digs[a[i]];
+      const dx = x - m.x, dz = z - m.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= m.r * m.r) continue;
+      const t = 1 - Math.sqrt(d2) / m.r;
+      dh -= m.d * t * t * (3 - 2 * t);
+    }
+    return dh;
   }
 
   _craterAt(x, z) {
