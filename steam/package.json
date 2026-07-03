@@ -1,0 +1,15 @@
+{
+  "name": "allmanssky-steam",
+  "version": "0.9.0",
+  "description": "AllMansSky — desktop shell for the Steam build",
+  "main": "main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron . --debug",
+    "dist": "electron-builder --config electron-builder.json"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

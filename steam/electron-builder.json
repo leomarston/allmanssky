@@ -1,0 +1,14 @@
+{
+  "appId": "com.allmanssky.game",
+  "productName": "AllMansSky",
+  "directories": { "output": "dist" },
+  "files": [
+    "main.cjs",
+    "build/icon.png",
+    { "from": "..", "to": "..", "filter": ["index.html", "src/**/*", "vendor/**/*"] }
+  ],
+  "asar": true,
+  "win": { "target": "dir", "icon": "build/icon.png" },
+  "linux": { "target": "dir", "icon": "build/icon.png", "category": "Game" },
+  "mac": { "target": "dir", "icon": "build/icon.png", "category": "public.app-category.games" }
+}
