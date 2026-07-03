@@ -120,7 +120,7 @@ class Game {
     }
     this.ui = {
       inventory: new InventoryUI(gameState),
-      trade: new TradeUI(gameState),
+      trade: new TradeUI(gameState, this.galaxy),
       map: new GalaxyMap(this.galaxy, gameState),
       quest: new QuestUI(gameState),
       build: new BuildUI(gameState),

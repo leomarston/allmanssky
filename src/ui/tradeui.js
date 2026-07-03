@@ -2,16 +2,15 @@
 // and Arcforge/ship upgrade tracks.
 // CONTRACT: new TradeUI(gameState) → .open(system) .close() .isOpen
 import { ITEMS, UPGRADES } from '../gameplay/items.js';
-import { priceOf, stationStock } from '../gameplay/trading.js';
+import { priceOf, sellPriceOf, stationStock, economyOf, classify, tradeRoutesFrom } from '../gameplay/trading.js';
 import { FACTIONS } from '../universe/lore.js';
 import { events } from '../core/events.js';
 import { audio } from '../audio/audio.js';
 
-const SELL_MULT = 0.72;
-
 export class TradeUI {
-  constructor(gs) {
+  constructor(gs, galaxy = null) {
     this.gs = gs;
+    this.galaxy = galaxy;
     this.root = null;
     this.tab = 'commodities';
   }
@@ -22,6 +21,9 @@ export class TradeUI {
     if (this.root) return;
     this.system = system;
     this._stock = stationStock(system);
+    this._econ = economyOf(system);
+    const tierPips = Array.from({ length: 3 }, (_, i) =>
+      `<span style="display:inline-block;width:9px;height:9px;margin-left:3px;border:1px solid var(--ui-amber);background:${i < this._econ.tier ? 'var(--ui-amber)' : 'transparent'};"></span>`).join('');
     audio.sfx('dock');
     const r = document.createElement('div');
     r.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,10,.62);backdrop-filter:blur(5px);z-index:40;';
@@ -29,15 +31,18 @@ export class TradeUI {
       <div class="ams-panel" style="width:min(880px,92vw);max-height:84vh;display:flex;flex-direction:column;padding:0;overflow:hidden;">
         <div class="ams-scanlines"></div>
         <div style="padding:20px 26px 14px;border-bottom:1px solid rgba(255,180,84,.25);">
-          <div class="ams-label" style="color:var(--ui-amber);">MERIDIAN COMBINE · TRADE TERMINAL</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="ams-label" style="color:var(--ui-amber);">MERIDIAN COMBINE · TRADE TERMINAL</div>
+            <div class="ams-label" style="color:var(--ui-amber);">${this._econ.label.toUpperCase()} ECONOMY ${tierPips}</div>
+          </div>
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:4px;">
             <div style="font-size:19px;letter-spacing:.08em;">${system.name.toUpperCase()}</div>
             <div class="ams-value" style="color:var(--ui-amber);">⌾ <b id="tr-lum"></b> LUMENS</div>
           </div>
-          <div style="font-size:11px;color:var(--ui-dim);margin-top:3px;">${FACTIONS.meridian?.blurb ?? 'Everything has a price. That is a promise, not a threat.'}</div>
+          <div style="font-size:11px;color:var(--ui-dim);margin-top:3px;">${this._econ.blurb}</div>
         </div>
         <div style="display:flex;gap:2px;padding:10px 26px 0;">
-          ${['commodities', 'services', 'upgrades'].map((t) => `
+          ${['commodities', 'routes', 'services', 'upgrades'].map((t) => `
             <button data-tab="${t}" class="tr-tab" style="background:none;border:none;border-bottom:2px solid transparent;color:var(--ui-dim);padding:8px 16px;cursor:pointer;font-family:inherit;font-size:11px;letter-spacing:.18em;text-transform:uppercase;">${t}</button>`).join('')}
         </div>
         <div id="tr-body" style="padding:16px 26px 22px;overflow:auto;flex:1;"></div>
@@ -56,6 +61,14 @@ export class TradeUI {
     d.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px;border:1px solid rgba(125,232,255,.14);margin-bottom:5px;background:rgba(6,14,20,.5);';
     d.innerHTML = html;
     return d;
+  }
+
+  /** small EXPORT (cheap) / IMPORT (pays well) chip for a commodity */
+  _tag(itemId) {
+    const k = classify(itemId, this.system);
+    if (k === 'export') return '<span style="font-size:9px;letter-spacing:.1em;color:var(--ui-green);border:1px solid rgba(125,255,180,.4);padding:1px 4px;margin-left:4px;">▼ EXPORT</span>';
+    if (k === 'import') return '<span style="font-size:9px;letter-spacing:.1em;color:var(--ui-amber);border:1px solid rgba(255,180,84,.4);padding:1px 4px;margin-left:4px;">▲ IMPORT</span>';
+    return '';
   }
 
   _btn(label, ok, fn) {
@@ -87,7 +100,7 @@ export class TradeUI {
       for (const s of this._stock) {
         const it = ITEMS[s.id];
         const row = this._row(`
-          <div><span style="color:${it.color};">◆</span> ${it.name}
+          <div><span style="color:${it.color};">◆</span> ${it.name} ${this._tag(s.id)}
             <div style="font-size:10px;color:var(--ui-dim);">${it.desc}</div></div>`);
         const controls = document.createElement('div');
         controls.style.cssText = 'display:flex;gap:5px;';
@@ -103,9 +116,10 @@ export class TradeUI {
       if (!gs.inventory.length) sellCol.innerHTML += '<div style="color:var(--ui-dim);font-size:12px;">empty hold</div>';
       for (const s of [...gs.inventory]) {
         const it = ITEMS[s.id];
-        const unit = Math.max(1, Math.round(priceOf(s.id, this.system) * SELL_MULT));
+        const unit = sellPriceOf(s.id, this.system);
         const row = this._row(`
-          <div><span style="color:${it.color};">◆</span> ${it.name} <span class="ams-value" style="color:var(--ui-dim);">×${s.qty}</span></div>`);
+          <div><span style="color:${it.color};">◆</span> ${it.name} ${this._tag(s.id)}
+            <span class="ams-value" style="color:var(--ui-dim);">×${s.qty}</span></div>`);
         const controls = document.createElement('div');
         controls.style.cssText = 'display:flex;gap:5px;';
         controls.appendChild(this._btn(`×1 · ${unit}⌾`, true, () => { gs.removeItem(s.id, 1); gs.addLumens(unit); }));
@@ -115,6 +129,28 @@ export class TradeUI {
       }
       wrap.append(buyCol, sellCol);
       body.appendChild(wrap);
+    }
+
+    if (this.tab === 'routes') {
+      const routes = this.galaxy ? tradeRoutesFrom(this.system, this.galaxy) : [];
+      if (!routes.length) {
+        body.innerHTML = '<div style="color:var(--ui-dim);font-size:12px;padding:8px;">No profitable runs from this market within scan range. Warp somewhere with a different economy and check again.</div>';
+      } else {
+        body.innerHTML = '<div class="ams-label" style="margin-bottom:10px;color:var(--ui-cyan);">SUGGESTED RUNS — buy here, sell there</div>';
+        for (const rt of routes) {
+          const it = ITEMS[rt.itemId];
+          const row = this._row(`
+            <div><span style="color:${it.color};">◆</span> <b>${it.name}</b>
+              <div style="font-size:11px;color:var(--ui-dim);margin-top:2px;">
+                buy here ⌾${rt.buyHere} → sell at <span style="color:var(--ui-ink);">${rt.systemName}</span> ⌾${rt.sellThere}
+                <span style="color:var(--ui-green);margin-left:6px;">+${rt.marginPct}%</span></div></div>`);
+          row.appendChild(this._btn('LOCK TARGET', true, () => {
+            this.gs.quests.vesperTarget = rt.systemId;
+            events.emit('notify', { text: `ROUTE TARGET LOCKED — ${rt.systemName}`, tone: 'info' });
+          }));
+          body.appendChild(row);
+        }
+      }
     }
 
     if (this.tab === 'services') {
