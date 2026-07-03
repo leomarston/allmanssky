@@ -60,5 +60,7 @@ On foot: **WASD** move, **Shift** sprint, **Space**
 jump / hold jetpack, **F** interact, **V** scan, **LMB** mine/fire, **R** swap
 Arcforge mode (beam/bolts), **T** headlamp, **B** build mode, **Tab**
 inventory, **M** galaxy map. In ship: mouse steer, **W/S** throttle, **Q/E**
-roll, **Shift** boost, **LMB** lasers/mining beam, **G** land / take off,
-**F** dock, **J** warp (needs a Void Cell). **Esc** pause.
+roll, **Shift** boost, **LMB** lasers/mining beam, **G** land (low over ground) / take off,
+**F** dock / board / disembark, **J** warp (needs a Void Cell). **Esc** pause.
+Enter a planet's atmosphere with **G** from space — you keep flying; land where
+you like, and climb high to leave the atmosphere back into space.

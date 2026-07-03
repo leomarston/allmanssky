@@ -1,12 +1,14 @@
-// On-foot first-person controller: mouse look, walk/sprint, jump, jetpack,
+// On-foot first-person controller: mouse look, walk/sprint with real
+// acceleration, jump, jetpack, slope resistance, footsteps, landing impact —
 // terrain collision against the TerrainField height authority.
 import * as THREE from 'three';
 import { input } from '../core/input.js';
 import { events } from '../core/events.js';
+import { audio } from '../audio/audio.js';
 
 const EYE_HEIGHT = 1.7;
-const WALK_SPEED = 6.5;
-const SPRINT_MULT = 1.75;
+const WALK_SPEED = 5.2;
+const SPRINT_MULT = 1.65;
 const JUMP_SPEED = 6.0;
 const JET_ACCEL = 16.0;
 const JET_DRAIN = 0.45;     // charge/s while thrusting
@@ -33,6 +35,9 @@ export class PlayerController {
     this.enabled = true;
     this.headBobPhase = 0;
     this._wasJetting = false;
+    this._stepPhase = 0;       // footstep cycle
+    this._landDip = 0;         // camera dip after a hard landing
+    this._baseFov = camera.fov;
   }
 
   teleport(x, z, yOffset = 0.5) {
@@ -64,11 +69,18 @@ export class PlayerController {
     const wishZ = -fx * sin - fz * cos;
 
     const sprinting = input.action('sprint') && fz > 0;
-    const targetSpeed = WALK_SPEED * (sprinting ? SPRINT_MULT : 1);
+    let targetSpeed = WALK_SPEED * (sprinting ? SPRINT_MULT : 1);
+
+    // slope resistance: climbing steep ground is slower, descending eases you on
+    if ((fx || fz) && this.onGround) {
+      const n = this.field.normal(this.position.x, this.position.z);
+      const uphill = -(n.x * wishX + n.z * wishZ); // >0 when the slope rises ahead
+      targetSpeed *= THREE.MathUtils.clamp(1 - uphill * 1.4, 0.45, 1.12);
+    }
 
     if (this.onGround) {
-      // exponential approach to wish velocity — responsive but smooth
-      const t = 1 - Math.exp(-12 * dt);
+      // heavier start/stop than pure exponential snap — walking has mass
+      const t = 1 - Math.exp(-8.5 * dt);
       this.velocity.x += (wishX * targetSpeed - this.velocity.x) * t;
       this.velocity.z += (wishZ * targetSpeed - this.velocity.z) * t;
       if (input.actionPressed('jump')) {
@@ -93,12 +105,20 @@ export class PlayerController {
     }
 
     this.velocity.y -= this.gravity * dt;
+    const fallSpeed = -this.velocity.y;
     this._apply(dt);
 
     // ground collision via height authority
     const groundY = this.field.height(this.position.x, this.position.z);
     if (this.position.y <= groundY) {
-      if (!this.onGround && this.velocity.y < -12) events.emit('audio:play', 'land');
+      if (!this.onGround) {
+        // landing impact: camera dip + thud scale with fall speed
+        if (fallSpeed > 4) {
+          this._landDip = Math.min(0.34, fallSpeed * 0.022);
+          audio.sfx('land', { volume: Math.min(1, fallSpeed / 16) });
+        }
+        if (fallSpeed > 12) events.emit('audio:play', 'land');
+      }
       this.position.y = groundY;
       if (this.velocity.y < 0) this.velocity.y = 0;
       this.onGround = true;
@@ -108,12 +128,37 @@ export class PlayerController {
     }
     if (this.onGround) this.jetpack = Math.min(1, this.jetpack + JET_REGEN * dt);
 
-    // camera: eye height + slight head bob while walking
+    // ---- camera: bob, sway, footsteps, landing dip, sprint FOV ----------------
     const moving = this.onGround && this.speed > 0.5;
-    if (moving) this.headBobPhase += dt * this.speed * 1.4;
-    const bob = moving ? Math.sin(this.headBobPhase) * 0.045 : 0;
-    this.camera.position.set(this.position.x, this.position.y + EYE_HEIGHT + bob, this.position.z);
-    this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
+    const speed01 = Math.min(1, this.speed / (WALK_SPEED * SPRINT_MULT));
+    if (moving) {
+      const prev = this.headBobPhase;
+      this.headBobPhase += dt * (5.4 + 5.2 * speed01);
+      // a footstep on each half-cycle (each foot), softer at a stroll
+      if (Math.floor(prev / Math.PI) !== Math.floor(this.headBobPhase / Math.PI)) {
+        audio.sfx('footstep', { volume: 0.35 + speed01 * 0.65 });
+      }
+    }
+    const bobY = moving ? Math.sin(this.headBobPhase * 2) * (0.028 + 0.03 * speed01) : 0;
+    const swayX = moving ? Math.sin(this.headBobPhase) * (0.014 + 0.016 * speed01) : 0;
+    this._landDip = Math.max(0, this._landDip - dt * 0.9);
+    const dip = this._landDip * Math.sin(Math.min(1, this._landDip / 0.34) * Math.PI);
+
+    const cos2 = Math.cos(this.yaw), sin2 = Math.sin(this.yaw);
+    this.camera.position.set(
+      this.position.x + swayX * cos2,
+      this.position.y + EYE_HEIGHT + bobY - dip,
+      this.position.z - swayX * sin2,
+    );
+    this.camera.quaternion.setFromEuler(new THREE.Euler(
+      this.pitch, this.yaw, moving ? Math.sin(this.headBobPhase) * 0.006 : 0, 'YXZ'));
+
+    // gentle FOV push while sprinting
+    const wantFov = this._baseFov + (sprinting && moving ? 4.5 : 0);
+    if (Math.abs(this.camera.fov - wantFov) > 0.05) {
+      this.camera.fov += (wantFov - this.camera.fov) * Math.min(1, dt * 5);
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   _apply(dt) {

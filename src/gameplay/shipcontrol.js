@@ -10,10 +10,11 @@ const PITCH_RATE = 1.6, YAW_RATE = 1.1, ROLL_RATE = 2.2;
 
 export class ShipController {
   /** @param {THREE.Object3D} shipGroup visual root (from buildShip().group) */
-  constructor(shipGroup, { maxSpeed = BASE_SPEED, agility = 1 } = {}) {
+  constructor(shipGroup, { maxSpeed = BASE_SPEED, agility = 1, boostMult = BOOST_MULT } = {}) {
     this.ship = shipGroup;
     this.maxSpeed = maxSpeed;
     this.agility = agility;
+    this.boostMult = boostMult;
     this.velocity = new THREE.Vector3();
     this.throttle = 0;            // 0..1
     this.boost = false;
@@ -72,7 +73,7 @@ export class ShipController {
 
     // -- velocity chases the nose --
     const target = this.forward.clone().multiplyScalar(
-      this.throttle * this.maxSpeed * (this.boost ? BOOST_MULT : 1)
+      this.throttle * this.maxSpeed * (this.boost ? this.boostMult : 1)
     );
     // vertical strafe thrusters
     if (this.enabled) {

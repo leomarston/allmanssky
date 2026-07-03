@@ -166,6 +166,13 @@ function echoTail(out, time = 0.16, fb = 0.35, wet = 0.3, life = 2.5) {
 // SFX bank — each entry: (t, out) => schedules one sound on the sfx bus.
 // ---------------------------------------------------------------------------
 const SFX = {
+  footstep(t, out) {
+    // soft regolith crunch — retriggered by the walk cycle, so keep it subtle
+    noise(out, t, {
+      buf: 'brown', dur: 0.07, vol: 0.1, a: 0.004, tau: 0.028,
+      type: 'lowpass', f0: 420 + Math.random() * 160, rate: 0.85 + Math.random() * 0.3,
+    });
+  },
   click(t, out) {
     tone(out, t, { type: 'square', f0: 1400, f1: 900, pt: 0.05, dur: 0.05, vol: 0.16, a: 0.002, tau: 0.018, lp: 2600 });
     noise(out, t, { dur: 0.02, vol: 0.05, a: 0.001, tau: 0.007, type: 'highpass', f0: 4200 });

@@ -251,6 +251,7 @@ export class SpaceState {
     ctx.switchState('surface', {
       systemId: this.systemId,
       planetIndex: p.index,
+      arrive: 'entry',   // drop into the atmosphere still flying — land with G
       landingPos: { x: Math.cos(az) * 380, z: Math.sin(az) * 380 },
     });
   }

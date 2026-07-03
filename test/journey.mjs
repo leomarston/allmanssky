@@ -71,7 +71,7 @@ pass &= await step('space', async () => {
   if (state !== 'space') errors.push(`CONSOLE: expected space state, got ${state}`);
 });
 
-pass &= await step('land-on-planet', async () => {
+pass &= await step('atmospheric-entry', async () => {
   await page.evaluate(async () => {
     const g = window.__AMS__.game;
     const space = g.state;
@@ -79,16 +79,40 @@ pass &= await step('land-on-planet', async () => {
     await g.switchState('surface', {
       systemId: space.systemId,
       planetIndex: p.index,
+      arrive: 'entry',
       landingPos: { x: 120, z: -60 },
     });
   });
   await page.waitForTimeout(9000);
+  const mode = await page.evaluate(() => window.__AMS__?.game?.state?.mode);
+  if (mode !== 'ship') errors.push(`CONSOLE: expected flight after entry, got mode=${mode}`);
 });
 
-// 4. verify surface state + walk forward a moment
+// 4. fly down and land on the skids (poll: headless software GL runs ~3 fps,
+// so scripted-time animations take many real seconds)
+pass &= await step('land', async () => {
+  await page.evaluate(() => {
+    const s = window.__AMS__.game.state;
+    const g = s.shipObj.group.position;
+    // find dry ground (landing on water is refused), then descend and land
+    const sea = Number.isFinite(s.field.seaY) ? s.field.seaY : -Infinity;
+    for (let r = 0; r < 2000; r += 60) {
+      const x = g.x + r, z = g.z + (r % 120);
+      if (s.field.height(x, z) > sea + 1) { g.x = x; g.z = z; break; }
+    }
+    g.y = s.field.height(g.x, g.z) + 40;
+    s._requestLanding();
+  });
+  await page.waitForFunction(() => window.__AMS__?.game?.state?.mode === 'seated', { timeout: 45000 })
+    .catch(async () => errors.push(`CONSOLE: expected seated after landing, got mode=${await page.evaluate(() => window.__AMS__?.game?.state?.mode)}`));
+});
+
+// 5. disembark + walk
 pass &= await step('surface-walk', async () => {
-  const state = await page.evaluate(() => window.__AMS__?.game?.state?.name);
-  if (state !== 'surface') errors.push(`CONSOLE: expected surface state, got ${state}`);
+  await page.evaluate(() => window.__AMS__.game.state._exitShip());
+  await page.waitForTimeout(800);
+  const mode = await page.evaluate(() => window.__AMS__?.game?.state?.mode);
+  if (mode !== 'foot') errors.push(`CONSOLE: expected foot after exit, got mode=${mode}`);
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(2500);
   await page.keyboard.up('KeyW');
@@ -104,15 +128,15 @@ pass &= await step('inventory-close', async () => {
   await page.waitForTimeout(600);
 });
 
-// 6. takeoff back to space (programmatic — same code path as F at the ship)
+// 6. board, hover-takeoff, climb out of the atmosphere into space
 pass &= await step('takeoff', async () => {
-  await page.evaluate(async () => {
-    const g = window.__AMS__.game;
-    await g.state._takeoff();
-  });
-  await page.waitForTimeout(8000);
-  const state = await page.evaluate(() => window.__AMS__?.game?.state?.name);
-  if (state !== 'space') errors.push(`CONSOLE: expected space after takeoff, got ${state}`);
+  await page.evaluate(() => window.__AMS__.game.state._boardShip());
+  await page.waitForFunction(() => window.__AMS__?.game?.state?.mode === 'ship', { timeout: 45000 })
+    .catch(async () => errors.push(`CONSOLE: expected flight after takeoff, got mode=${await page.evaluate(() => window.__AMS__?.game?.state?.mode)}`));
+  // climb past the atmosphere ceiling
+  await page.evaluate(() => { window.__AMS__.game.state.shipObj.group.position.y += 700; });
+  await page.waitForFunction(() => window.__AMS__?.game?.state?.name === 'space', { timeout: 60000 })
+    .catch(async () => errors.push(`CONSOLE: expected space after climb-out, got ${await page.evaluate(() => window.__AMS__?.game?.state?.name)}`));
 });
 
 // 7. warp to a neighbor system
