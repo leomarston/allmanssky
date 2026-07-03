@@ -3,6 +3,7 @@
 // holographic glass theme. Owns its DOM under #ui-root.
 import { el, iconSVG } from './widgets.js';
 import { RNG } from '../core/rng.js';
+import { AMS_VERSION } from '../core/version.js';
 
 const SETTINGS_KEY = 'ams-settings';
 const SETTINGS_DEFAULTS = { volume: 0.8, sensitivity: 1.0, bloom: true };
@@ -140,7 +141,7 @@ export class Screens {
       };
 
       const foot = el('div', 'ams-menu-foot', ov);
-      foot.textContent = 'a wayfarer woke to the vesper signal · v0.1';
+      foot.textContent = `a wayfarer woke to the vesper signal · ${AMS_VERSION}`;
 
       buildRoot();
       this._bindKeys(ov, menu, null);

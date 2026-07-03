@@ -19,8 +19,7 @@ import { GalaxyMap } from './ui/mapui.js';
 import { QuestUI } from './ui/questui.js';
 import { BuildUI } from './ui/buildui.js';
 import { audio } from './audio/audio.js';
-
-export const AMS_VERSION = 'v0.6 · A/D turns the ship';
+import { AMS_VERSION, AMS_VERSION_NOTE } from './core/version.js';
 
 class Game {
   constructor() {
@@ -81,10 +80,10 @@ class Game {
 
     // build stamp — verifies which deployment a browser is actually running
     const ver = document.createElement('div');
-    ver.textContent = AMS_VERSION;
-    ver.style.cssText = 'position:absolute;right:8px;bottom:6px;font-size:9px;letter-spacing:.12em;color:rgba(127,163,180,.5);pointer-events:none;z-index:4;font-family:var(--ui-font,system-ui);';
+    ver.textContent = `${AMS_VERSION} · ${AMS_VERSION_NOTE}`;
+    ver.style.cssText = 'position:absolute;right:8px;bottom:6px;font-size:9px;letter-spacing:.12em;color:rgba(127,163,180,.5);pointer-events:none;z-index:100;font-family:var(--ui-font,system-ui);';
     this.uiRoot.appendChild(ver);
-    console.log(`AllMansSky ${AMS_VERSION}`);
+    console.log(`AllMansSky ${AMS_VERSION} — ${AMS_VERSION_NOTE}`);
   }
 
   /** cross-state context handed to states */
