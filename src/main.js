@@ -19,6 +19,7 @@ import { GalaxyMap } from './ui/mapui.js';
 import { QuestUI } from './ui/questui.js';
 import { BuildUI } from './ui/buildui.js';
 import { ShipyardUI } from './ui/shipyardui.js';
+import { MissionBoard } from './ui/missionboard.js';
 import { PhotoMode } from './ui/photomode.js';
 import { audio } from './audio/audio.js';
 import { AMS_VERSION, AMS_VERSION_NOTE } from './core/version.js';
@@ -118,6 +119,8 @@ class Game {
     if (!this.gameState.currentSystemId) {
       this.gameState.currentSystemId = this.galaxy.startingSystemId();
     }
+    // quests first — the mission board UI holds a reference to it
+    this.quests = new QuestSystem(gameState, this.galaxy);
     this.ui = {
       inventory: new InventoryUI(gameState),
       trade: new TradeUI(gameState, this.galaxy),
@@ -125,9 +128,11 @@ class Game {
       quest: new QuestUI(gameState),
       build: new BuildUI(gameState),
       shipyard: new ShipyardUI(gameState),
+      missions: new MissionBoard(gameState, this.galaxy, this.quests),
       anyOpen: () =>
         !!(this.ui.inventory.isOpen || this.ui.trade.isOpen || this.ui.map.isOpen
-          || this.ui.quest.isOpen || this.ui.shipyard.isOpen || this.screens.isOpen),
+          || this.ui.quest.isOpen || this.ui.shipyard.isOpen || this.ui.missions.isOpen
+          || this.screens.isOpen),
     };
 
     // Warden wanted level — pips under the compass, evade timer sweep
@@ -146,7 +151,6 @@ class Game {
           `<span style="width:12px;height:5px;background:${i < level ? '#ff5a3c' : '#3a1418'};display:inline-block;"></span>`).join('')
         + (evading01 > 0 ? `<span style="font-size:9px;color:#7fa3b4;margin-left:6px;">EVADING ${Math.round(evading01 * 100)}%</span>` : '');
     });
-    this.quests = new QuestSystem(gameState, this.galaxy);
     this.quests.init?.();
 
     events.on('player:death', () => this._onDeath());
@@ -296,6 +300,7 @@ class Game {
           else if (this.ui.map.isOpen) this.ui.map.close();
           else if (this.ui.quest.isOpen) this.ui.quest.close();
           else if (this.ui.shipyard.isOpen) this.ui.shipyard.close();
+          else if (this.ui.missions.isOpen) this.ui.missions.close();
           else if (!this.screens.isOpen) this._pause();
         }
         if (input.actionPressed('photo') && !this.screens.isOpen && !this.ui.anyOpen()) {

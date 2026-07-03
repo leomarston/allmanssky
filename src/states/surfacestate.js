@@ -495,9 +495,10 @@ export class SurfaceState {
           label = 'F — SALVAGE WRECK';
           if (input.actionPressed('interact')) this._salvage(prop);
         } else if (prop.kind === 'outpost') {
-          label = 'F — TRADE · H — SHIPYARD';
+          label = 'F — TRADE · H — SHIPYARD · K — MISSIONS';
           if (input.actionPressed('interact')) ctx.ui.trade?.open?.(this.system);
           if (input.keyPressed('KeyH')) ctx.ui.shipyard?.open?.(`outpost:${this.def.id}`, { title: 'OUTPOST SHIPWRIGHT' });
+          if (input.keyPressed('KeyK')) ctx.ui.missions?.open?.(this.system);
         }
       }
       if (!label) {

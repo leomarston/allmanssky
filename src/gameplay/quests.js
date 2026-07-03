@@ -83,6 +83,89 @@ const CONTRACT_TEMPLATES = [
 ];
 
 const MAX_ACTIVE = 3;
+const MAX_BOARD = 3;
+
+// ---------------------------------------------------------------- reputation --
+const REP_TIERS = [
+  { at: 0, name: 'DRIFTER', discount: 0 },
+  { at: 50, name: 'ASSOCIATE', discount: 0.03 },
+  { at: 150, name: 'PARTNER', discount: 0.06 },
+  { at: 400, name: 'ENVOY', discount: 0.09 },
+  { at: 1000, name: 'LUMINARY', discount: 0.12 },
+];
+
+/** reputation tier for a standing value → { name, discount, next } */
+export function repTier(v) {
+  let cur = REP_TIERS[0], next = null;
+  for (let i = 0; i < REP_TIERS.length; i++) {
+    if (v >= REP_TIERS[i].at) { cur = REP_TIERS[i]; next = REP_TIERS[i + 1] ?? null; }
+  }
+  return { ...cur, next };
+}
+
+// board mission templates — each posts under a faction and pays standing.
+const BOARD_TEMPLATES = [
+  { kind: 'prospect', faction: 'meridian', make: (rng, ctx) => {
+    const id = rng.pick(ctx.resources ?? ['ferrox', 'silica']); const n = rng.int(15, 40);
+    return { title: `Haulage: ${ITEMS[id]?.name ?? id} ×${n}`, desc: 'The Combine needs raw stock and pays a finder\'s fee.',
+      event: 'resource:mined', filterId: id, need: n, reward: { lumens: n * (ITEMS[id]?.value ?? 6) * 2, rep: 18 } };
+  } },
+  { kind: 'cartograph', faction: 'chorale', make: (rng) => {
+    const n = rng.int(2, 5);
+    return { title: `Field Survey: catalogue ${n} lifeforms`, desc: 'The Choir of Glass records every voice in the Reach.',
+      event: 'discovery:new', filterKind: 'creatures', need: n, reward: { lumens: 700, items: [['chlorophane', 3]], rep: 22 } };
+  } },
+  { kind: 'pilgrimage', faction: 'chorale', make: () => ({
+    title: 'Pilgrimage: commune with a ruin', desc: 'Stand where the Luminel stood and listen.',
+    event: 'discovery:new', filterKind: 'ruins', need: 1, reward: { lumens: 600, rep: 20 } }) },
+  { kind: 'purge', faction: 'sunward', make: (rng) => {
+    const n = rng.int(2, 5);
+    return { title: `Culling: scrap ${n} Wardens`, desc: 'The Sunward Kin buy custodian wreckage by the tonne.',
+      event: 'combat:wardenKilled', need: n, reward: { lumens: 1000, items: [['solanite', 2]], rep: 26 } };
+  } },
+  { kind: 'bounty', faction: 'meridian', make: (rng) => {
+    const n = rng.int(1, 3);
+    return { title: `Bounty: down ${n} Ashen raider${n > 1 ? 's' : ''}`, desc: 'The Combine insures its lanes in blood money.',
+      event: 'combat:pirateKilled', need: n, reward: { lumens: 1100, rep: 24 } };
+  } },
+  { kind: 'courier', faction: 'meridian', make: (rng) => {
+    const id = rng.pick(['ferroweave', 'luminglass', 'oxylite', 'carbyne']); const n = rng.int(6, 18);
+    return { title: `Courier: deliver ${ITEMS[id]?.name ?? id} ×${n}`, desc: 'Bring the goods to any board and claim payment.',
+      event: 'courier', filterId: id, need: n, reward: { lumens: n * (ITEMS[id]?.value ?? 10) * 3, rep: 20 } };
+  } },
+  { kind: 'survey', faction: 'sunward', make: (rng, ctx) => {
+    const target = ctx.neighbor;
+    if (!target) return null;
+    return { title: `Scout run: reach ${target.name}`, desc: 'The Kin want eyes on a neighbouring system.',
+      event: 'survey', target: target.id, need: 1, reward: { lumens: 900, items: [['voidsalt', 2]], rep: 22 } };
+  } },
+];
+
+/** deterministic board offers for a system (needs the system + galaxy for survey targets) */
+export function boardMissionsFor(system, gs, galaxy) {
+  const done = gs.quests?.completedBoard?.length ?? 0;
+  const rng = new RNG(hash32(hashString(String(system.id)), done, 0x804d));
+  let resources = null, neighbor = null;
+  try { resources = galaxy?.getSystem(system.id)?.planets?.[0]?.resources; } catch { /* fine */ }
+  try { const ns = galaxy?.neighborsOf(system.id, 3) ?? []; neighbor = ns[rng.int(0, Math.max(0, ns.length - 1))]; } catch { /* fine */ }
+  const ctx = { resources, neighbor };
+  const out = [];
+  const pool = [...BOARD_TEMPLATES];
+  let guard = 0;
+  const count = rng.int(4, 6);
+  while (out.length < count && guard++ < 24 && pool.length) {
+    const tpl = rng.pick(pool);
+    const m = tpl.make(rng.fork(`b${out.length}${guard}`), ctx);
+    if (!m) continue;
+    m.id = `${system.id}:${done}:${out.length}`;
+    m.kind = tpl.kind;
+    m.faction = tpl.faction;
+    m.have = 0; m.done = false;
+    if (out.some((o) => o.title === m.title)) continue;
+    out.push(m);
+  }
+  return out;
+}
 
 export class QuestSystem {
   constructor(gs, galaxy) {
@@ -97,15 +180,20 @@ export class QuestSystem {
     q.completed ??= [];
     q.vesperDepth ??= 0;
     q.beatsSeen ??= [];
+    q.board ??= [];
+    q.completedBoard ??= [];
+    q.reputation ??= { meridian: 0, chorale: 0, sunward: 0 };
 
     this._retarget();
     this._refill();
 
-    this._offs.push(events.on('warp:end', () => {
+    this._offs.push(events.on('warp:end', (systemId) => {
       this.gs.quests.vesperDepth += 1;
       this._retarget();
       this._checkBeats();
       this._refill();
+      // survey board missions complete on arrival at their target system
+      this._progressBoard('survey', (m) => (m.target === systemId ? 1 : 0));
     }));
 
     // generic contract progress
@@ -151,6 +239,70 @@ export class QuestSystem {
       }
     }
     if (changed) events.emit('quest:updated');
+    // accepted board missions track on the same events
+    this._progressBoard(eventName, countFn);
+  }
+
+  _progressBoard(eventName, countFn) {
+    const q = this.gs.quests;
+    if (!q.board?.length) return;
+    let changed = false;
+    for (const m of q.board) {
+      if (m.event !== eventName || m.done) continue;
+      const inc = countFn(m);
+      if (!inc) continue;
+      m.have = Math.min(m.need, (m.have ?? 0) + inc);
+      changed = true;
+      if (m.have >= m.need) { m.done = true; this._completeBoard(m); }
+    }
+    if (changed) events.emit('quest:updated');
+  }
+
+  /** reputation-tier trade discount for a faction (0..0.12) */
+  discountFor(faction) { return repTier(this.gs.quests.reputation?.[faction] ?? 0).discount; }
+
+  acceptBoard(m) {
+    const q = this.gs.quests;
+    if ((q.board?.length ?? 0) >= MAX_BOARD) { events.emit('notify', { text: 'MISSION LOG FULL (3 max)', tone: 'warn' }); audio.sfx('deny'); return false; }
+    if (q.board.some((x) => x.id === m.id)) return false;
+    q.board.push({ ...m, have: 0, done: false, accepted: true });
+    audio.sfx('confirm');
+    events.emit('notify', { text: `MISSION ACCEPTED — ${m.title}`, tone: 'info' });
+    events.emit('quest:updated');
+    return true;
+  }
+
+  abandonBoard(m) {
+    const q = this.gs.quests;
+    q.board = q.board.filter((x) => x.id !== m.id);
+    audio.sfx('click');
+    events.emit('quest:updated');
+  }
+
+  /** courier missions complete by handing over held cargo at any board */
+  claimCourier(m) {
+    const gs = this.gs;
+    if (m.kind !== 'courier') return false;
+    if (gs.countItem(m.filterId) < m.need) { events.emit('notify', { text: 'YOU LACK THE CARGO TO DELIVER', tone: 'warn' }); audio.sfx('deny'); return false; }
+    gs.removeItem(m.filterId, m.need);
+    m.done = true;
+    this._completeBoard(m);
+    return true;
+  }
+
+  _completeBoard(m) {
+    const gs = this.gs;
+    gs.quests.board = gs.quests.board.filter((x) => x.id !== m.id);
+    gs.quests.completedBoard.push(m.title);
+    if (m.reward?.lumens) gs.addLumens(m.reward.lumens);
+    for (const [id, qty] of m.reward?.items ?? []) gs.addItem(id, qty);
+    if (m.reward?.rep && m.faction) {
+      gs.quests.reputation[m.faction] = (gs.quests.reputation[m.faction] ?? 0) + m.reward.rep;
+    }
+    audio.sfx('discovery');
+    const fac = FACTIONS[m.faction]?.name ?? m.faction;
+    events.emit('notify', { text: `MISSION COMPLETE — ${m.title} (+${m.reward?.lumens ?? 0} ⌾ · +${m.reward?.rep ?? 0} ${fac} STANDING)`, tone: 'good' });
+    events.emit('quest:updated');
   }
 
   _complete(c) {

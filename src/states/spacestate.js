@@ -296,7 +296,7 @@ export class SpaceState {
         ? this.station.group.localToWorld(this.station.dockPos.clone())
         : this.station.group.position;
       if (this.shipCtl.position.distanceTo(dockWorld) < DOCK_RANGE) {
-        interact = 'F — TRADE · H — SHIPYARD';
+        interact = 'F — TRADE · H — SHIPYARD · K — MISSIONS';
         if (input.actionPressed('interact')) {
           audio.sfx('dock');
           ctx.ui.trade?.open?.(this.system);
@@ -305,6 +305,7 @@ export class SpaceState {
           audio.sfx('dock');
           ctx.ui.shipyard?.open?.(`station:${this.systemId}`, { title: this.system.station?.name ?? 'STATION SHIPYARD' });
         }
+        if (input.keyPressed('KeyK')) ctx.ui.missions?.open?.(this.system);
       }
     }
     this._interactLabel = interact;

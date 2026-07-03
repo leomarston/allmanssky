@@ -26,20 +26,33 @@ export class QuestUI {
   get isOpen() { return !!this.root; }
 
   _renderTracker() {
-    const active = this.gs?.quests?.active ?? [];
-    this.tracker.innerHTML = active.length
-      ? `<div class="ams-label" style="opacity:.75;margin-bottom:2px;">CONTRACTS</div>`
-        + active.map((c) => `
-          <div style="background:rgba(6,16,22,.55);border-left:2px solid var(--ui-cyan,#7de8ff);padding:5px 9px;backdrop-filter:blur(3px);">
-            <div style="font-size:11px;letter-spacing:.06em;color:var(--ui-ink,#d6f2ff);">${c.title}</div>
-            <div style="font-size:10px;color:var(--ui-dim,#7fa3b4);margin-top:1px;">
-              ${c.have ?? 0} / ${c.need}
-              <span style="display:inline-block;width:70px;height:3px;background:#0a1a22;margin-left:6px;vertical-align:middle;">
-                <span style="display:block;height:100%;width:${Math.round(100 * (c.have ?? 0) / c.need)}%;background:var(--ui-cyan,#7de8ff);"></span>
-              </span>
-            </div>
-          </div>`).join('')
-      : '';
+    const q = this.gs?.quests ?? {};
+    const active = q.active ?? [];
+    const board = q.board ?? [];
+    const FCOL = { meridian: '#ffb454', chorale: '#7de8ff', sunward: '#7dffb4' };
+    const line = (c, dot, col) => `
+      <div style="background:rgba(6,16,22,.55);border-left:2px solid ${col};padding:5px 9px;backdrop-filter:blur(3px);">
+        <div style="font-size:11px;letter-spacing:.06em;color:var(--ui-ink,#d6f2ff);">${dot}${c.title}</div>
+        <div style="font-size:10px;color:var(--ui-dim,#7fa3b4);margin-top:1px;">
+          ${c.have ?? 0} / ${c.need}
+          <span style="display:inline-block;width:70px;height:3px;background:#0a1a22;margin-left:6px;vertical-align:middle;">
+            <span style="display:block;height:100%;width:${Math.round(100 * (c.have ?? 0) / c.need)}%;background:${col};"></span>
+          </span>
+        </div>
+      </div>`;
+    let html = '';
+    if (active.length) {
+      html += `<div class="ams-label" style="opacity:.75;margin-bottom:2px;">CONTRACTS</div>`
+        + active.map((c) => line(c, '', 'var(--ui-cyan,#7de8ff)')).join('');
+    }
+    if (board.length) {
+      html += `<div class="ams-label" style="opacity:.75;margin:6px 0 2px;">MISSIONS</div>`
+        + board.map((m) => {
+          const col = FCOL[m.faction] ?? '#7de8ff';
+          return line(m, `<span style="color:${col};">● </span>`, col);
+        }).join('');
+    }
+    this.tracker.innerHTML = html;
   }
 
   showLore(lore) {
