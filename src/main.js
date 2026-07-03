@@ -20,7 +20,7 @@ import { QuestUI } from './ui/questui.js';
 import { BuildUI } from './ui/buildui.js';
 import { audio } from './audio/audio.js';
 
-export const AMS_VERSION = 'v0.5 · drag-look + arrow steering';
+export const AMS_VERSION = 'v0.6 · A/D turns the ship';
 
 class Game {
   constructor() {
