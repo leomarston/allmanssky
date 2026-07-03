@@ -10,6 +10,7 @@ import { GameState } from './gameplay/state.js';
 import { QuestSystem } from './gameplay/quests.js';
 import { SpaceState } from './states/spacestate.js';
 import { SurfaceState } from './states/surfacestate.js';
+import { HangarState } from './states/hangarstate.js';
 import { HUD } from './ui/hud.js';
 import { Screens } from './ui/screens.js';
 import * as notifications from './ui/notifications.js';
@@ -160,12 +161,17 @@ class Game {
   async switchState(name, params = {}) {
     const old = this.state;
     old?.exit?.();
-    const next = name === 'space' ? new SpaceState(this.ctx) : new SurfaceState(this.ctx);
+    const next = name === 'space' ? new SpaceState(this.ctx)
+      : name === 'hangar' ? new HangarState(this.ctx)
+        : new SurfaceState(this.ctx);
     this.state = next;
     await next.enter(params);
-    this.engine.setScene(next.scene, next.camera, name === 'space'
+    const bloom = name === 'space'
       ? { bloomStrength: 0.65, bloomRadius: 0.55, bloomThreshold: 0.8 }
-      : { bloomStrength: 0.4, bloomRadius: 0.5, bloomThreshold: 0.85 });
+      : name === 'hangar'
+        ? { bloomStrength: 0.55, bloomRadius: 0.58, bloomThreshold: 0.84 }
+        : { bloomStrength: 0.4, bloomRadius: 0.5, bloomThreshold: 0.85 };
+    this.engine.setScene(next.scene, next.camera, bloom);
     events.emit('state:change', name, old?.name);
   }
 
@@ -212,6 +218,13 @@ class Game {
           systemId: this.gameState.currentSystemId,
           planetIndex: idx,
           landingPos: { x: 0, z: 0 },
+        });
+      } else if (debugState === 'hangar') {
+        const sys = this.galaxy.getSystem(this.gameState.currentSystemId);
+        await this.switchState('hangar', {
+          systemId: this.gameState.currentSystemId,
+          faction: sys.station?.faction ?? 'meridian',
+          stationName: sys.station?.name ?? 'Test Anchorage',
         });
       } else {
         await this.switchState('space', { systemId: this.gameState.currentSystemId, mode: 'start' });

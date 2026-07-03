@@ -296,11 +296,8 @@ export class SpaceState {
         ? this.station.group.localToWorld(this.station.dockPos.clone())
         : this.station.group.position;
       if (this.shipCtl.position.distanceTo(dockWorld) < DOCK_RANGE) {
-        interact = 'F — TRADE · H — SHIPYARD · K — MISSIONS';
-        if (input.actionPressed('interact')) {
-          audio.sfx('dock');
-          ctx.ui.trade?.open?.(this.system);
-        }
+        interact = 'F — DISEMBARK · H — SHIPYARD · K — MISSIONS';
+        if (input.actionPressed('interact')) return this._enterStation();
         if (input.keyPressed('KeyH')) {
           audio.sfx('dock');
           ctx.ui.shipyard?.open?.(`station:${this.systemId}`, { title: this.system.station?.name ?? 'STATION SHIPYARD' });
@@ -330,6 +327,22 @@ export class SpaceState {
       planetIndex: p.index,
       arrive: 'entry',   // drop into the atmosphere still flying — land with G
       landingPos: { x: Math.cos(az) * 380, z: Math.sin(az) * 380 },
+    });
+  }
+
+  /** Dock and disembark: walk into the station's hangar interior on foot. */
+  async _enterStation() {
+    const { ctx } = this;
+    this._warping = true;               // freeze ship interactions during the fade
+    this.shipCtl.enabled = false;
+    audio.sfx('dock');
+    // remember where the ship is parked so we return to the same spot
+    ctx.gameState.location.pos = this.shipCtl.position.toArray();
+    await ctx.fade(0.9, '#04121c');
+    ctx.switchState('hangar', {
+      systemId: this.systemId,
+      faction: this.system.station?.faction ?? 'none',
+      stationName: this.system.station?.name ?? 'STATION',
     });
   }
 

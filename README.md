@@ -61,6 +61,13 @@ jump / hold jetpack, **F** interact, **V** scan, **LMB** mine/fire, **R** swap
 Arcforge mode (beam/bolts), **T** headlamp, **B** build mode, **P** photo mode, **N** summon/board exocraft, **Tab**
 inventory, **M** galaxy map. In ship: mouse steer, **W/S** throttle, **Q/E**
 roll, **Shift** boost, **LMB** lasers/mining beam, **G** land (low over ground) / take off,
-**F** dock / board / disembark, **J** warp (needs a Void Cell). **Esc** pause.
+**X** pulse drive, **J** warp (needs a Void Cell). **Esc** pause.
 Enter a planet's atmosphere with **G** from space — you keep flying; land where
 you like, and climb high to leave the atmosphere back into space.
+
+**Stations.** Fly close to a station and press **F** to *disembark* — you step out
+onto the deck of a walkable hangar. Walk up to the holographic **TRADE**,
+**SHIPYARD**, and **MISSIONS** terminals to use them, chat with the wandering
+faction crew (**F**), then board your parked ship (**F**) to launch back into
+space. **H**/**K** still quick-open the shipyard/mission board straight from the
+cockpit if you'd rather not leave your seat.

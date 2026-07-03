@@ -103,7 +103,7 @@ const SURNAMES = {
   none: ['Drifter', 'Farhail', 'Solo', 'of No Banner'],
 };
 
-const GREETINGS = {
+export const GREETINGS = {
   meridian: [
     'Manifest and credit line, Wayfarer — in that order.',
     'The Combine honors all contracts. Eventually.',

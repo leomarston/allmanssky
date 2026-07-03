@@ -1,8 +1,3 @@
-// WIP — NOT YET WIRED. Foundation for the walkable-station feature (Wave 2).
-// buildHangar() works and self-verifies, but the companion NPC crowd and the
-// space-state "hangar" sub-mode that mounts it are not built yet, so nothing
-// imports this module today. Kept as a head-start for resuming that feature.
-//
 // Walkable station hangar interior — the grand hall the player docks into.
 // A ~70×30×18 m vaulted bay: procedural deck plating with glowing guide
 // strips, a raised landing pad, a huge open bay mouth showing space (starfield
@@ -668,13 +663,11 @@ export function buildHangar(seed, faction = 'none') {
     }
     const stripFloor = glow(new THREE.BoxGeometry(MOUTH_W, 0.1, 0.35), trimGlowMat);
     stripFloor.position.set(0, 0.05, HALF_L - 0.6);
-    // atmosphere retention field — a barely-there shimmer
+    // atmosphere retention field — a barely-there shimmer (animated via fieldMat)
     const field = glow(new THREE.PlaneGeometry(MOUTH_W, MOUTH_H), fieldMat);
     field.position.set(0, MOUTH_H / 2, HALF_L + 0.1);
     field.renderOrder = 2;
-    this_field = field; // eslint-disable-line no-undef
   }
-  // (kept simple: reference stored below via closure variables)
 
   const starPanel = glow(new THREE.PlaneGeometry(130, 60), starMat);
   starPanel.rotation.y = Math.PI;
