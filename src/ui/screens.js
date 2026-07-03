@@ -111,13 +111,35 @@ export class Screens {
       const menu = el('div', 'ams-menu-buttons', ov);
       const done = (result) => { this._close(ov); resolve(result); };
 
+      // opts.saves: [{slot, systemId, lumens, warps, mode, savedAt} | null] ×3
+      const saves = opts.saves ?? [];
+      const slotLabel = (s, n) => {
+        if (!s) return `Slot ${n} — empty`;
+        const when = s.savedAt ? new Date(s.savedAt).toLocaleDateString() : '—';
+        return `Slot ${n} — ${s.warps} warps · ${s.lumens}⌾ · ${when}`;
+      };
+
       const buildRoot = () => {
         menu.textContent = '';
         if (opts.hasSave) {
           this._button(menu, 'Continue', () => done({ action: 'continue' }));
+          this._button(menu, 'Load Voyage', () => buildLoad());
         }
         this._button(menu, 'New Voyage', () => buildSeed());
         this._button(menu, 'Settings', async () => { await this.settings(); this._focusFirst(menu); });
+        this._focusFirst(menu);
+      };
+
+      const buildLoad = () => {
+        menu.textContent = '';
+        saves.forEach((s, i) => {
+          const b = this._button(menu, slotLabel(s, i + 1), () => {
+            if (s) { sfx('confirm'); done({ action: 'load', slot: i + 1 }); }
+            else sfx('deny');
+          });
+          if (!b) return;
+        });
+        this._button(menu, 'Back', () => buildRoot());
         this._focusFirst(menu);
       };
 
@@ -128,16 +150,24 @@ export class Screens {
         input.maxLength = 40;
         input.placeholder = 'universe seed — blank for fate';
         input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') launch();
+          if (e.key === 'Enter') buildSlotPick(input.value.trim() || undefined);
           e.stopPropagation();
         });
-        const launch = () => {
-          sfx('confirm');
-          done({ action: 'new', seed: input.value.trim() || undefined });
-        };
-        this._button(menu, 'Launch', launch);
+        this._button(menu, 'Launch', () => buildSlotPick(input.value.trim() || undefined));
         this._button(menu, 'Back', () => buildRoot());
         input.focus();
+      };
+
+      const buildSlotPick = (seed) => {
+        menu.textContent = '';
+        const note = el('div', 'ams-overlay-sub', menu);
+        note.textContent = 'choose a save slot';
+        saves.forEach((s, i) => {
+          this._button(menu, s ? `${slotLabel(s, i + 1)} · OVERWRITE` : `Slot ${i + 1} — empty`,
+            () => { sfx('confirm'); done({ action: 'new', seed, slot: i + 1 }); });
+        });
+        this._button(menu, 'Back', () => buildSeed());
+        this._focusFirst(menu);
       };
 
       const foot = el('div', 'ams-menu-foot', ov);

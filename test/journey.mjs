@@ -56,10 +56,14 @@ pass &= await step('newgame', async () => {
   const btn = page.locator('button, .ams-btn').filter({ hasText: /new voyage/i }).first();
   if (await btn.count()) await btn.click();
   else await page.keyboard.press('Enter');
-  // seed prompt may appear — press Enter / click begin
-  await page.waitForTimeout(800);
-  const begin = page.locator('button, .ams-btn').filter({ hasText: /begin|launch|start|embark/i }).first();
-  if (await begin.count()) await begin.click().catch(() => {});
+  // seed screen: click Launch
+  await page.waitForTimeout(700);
+  const launch = page.locator('button, .ams-btn').filter({ hasText: /^launch$|begin|embark/i }).first();
+  if (await launch.count()) await launch.click().catch(() => {});
+  // slot picker: pick the first slot (empty or overwrite)
+  await page.waitForTimeout(700);
+  const slot = page.locator('button, .ams-btn').filter({ hasText: /slot 1/i }).first();
+  if (await slot.count()) await slot.click().catch(() => {});
   await page.waitForFunction(() => window.__AMS__?.ready, { timeout: 40000 }).catch(() => {});
   await page.waitForTimeout(6000);
 });

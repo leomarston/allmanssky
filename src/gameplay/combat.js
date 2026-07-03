@@ -495,6 +495,10 @@ export class GroundCombat {
     this._t += dt;
     this._heat = Math.max(0, this._heat - dt * 0.12);
     this._fireCd -= dt;
+    if (!this._seenInit) {
+      this._seenInit = true;
+      this._lastSeen.copy(player.position);
+    }
 
     // ambient patrol population (waves own the sky once the level rises)
     this._spawnTimer -= dt;
@@ -929,6 +933,7 @@ export class GroundCombat {
     w.stateT = 0;
     w.volley = 0;
     if (w.obj.eye) w.obj.eye.scale.setScalar(1);
+    if (w.obj.shield) w.obj.shield.visible = w.obj.shieldWire.visible = false;
   }
 
   _updateLeaving(w, dt) {

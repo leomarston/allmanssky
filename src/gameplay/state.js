@@ -4,12 +4,15 @@ import { events } from '../core/events.js';
 import { hashString, RNG } from '../core/rng.js';
 import { ITEMS } from './items.js';
 
-const SAVE_KEY = 'ams-save-v1';
+const SAVE_KEY = 'ams-save-v1';           // legacy single-slot key (migrated)
+const SLOT_KEY = (n) => `ams-save-v1:slot${n}`;
+export const SAVE_SLOTS = 3;
 export const BASE_SLOTS = 24;
 
 export class GameState {
   constructor(galaxySeed = 1337) {
     this.version = 1;
+    this.slot = 1;                    // save slot this run writes to
     this.galaxySeed = galaxySeed;
     this.currentSystemId = null;      // set on new game / load
     this.visitedSystems = [];
@@ -99,31 +102,81 @@ export class GameState {
     return true;
   }
 
-  // ---- persistence ----
+  // ---- persistence (3 slots; legacy single-key saves migrate to slot 1) ----
   save() {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(this));
+      this.savedAt = Date.now();
+      localStorage.setItem(SLOT_KEY(this.slot ?? 1), JSON.stringify(this));
       events.emit('notify', { text: 'PROGRESS SAVED', tone: 'good' });
       return true;
     } catch (e) { console.error('save failed', e); return false; }
   }
 
-  static hasSave() {
-    try { return !!localStorage.getItem(SAVE_KEY); } catch { return false; }
+  static _migrateLegacy() {
+    try {
+      const legacy = localStorage.getItem(SAVE_KEY);
+      if (legacy && !localStorage.getItem(SLOT_KEY(1))) {
+        localStorage.setItem(SLOT_KEY(1), legacy);
+        localStorage.removeItem(SAVE_KEY);
+      }
+    } catch { /* ignore */ }
   }
 
-  static load() {
+  static hasSave(slot = null) {
+    GameState._migrateLegacy();
     try {
-      const raw = localStorage.getItem(SAVE_KEY);
+      if (slot != null) return !!localStorage.getItem(SLOT_KEY(slot));
+      for (let n = 1; n <= SAVE_SLOTS; n++) if (localStorage.getItem(SLOT_KEY(n))) return true;
+      return false;
+    } catch { return false; }
+  }
+
+  /** light metadata for the load menu: [{slot, systemId, lumens, warps, savedAt} | null] */
+  static listSaves() {
+    GameState._migrateLegacy();
+    const out = [];
+    for (let n = 1; n <= SAVE_SLOTS; n++) {
+      try {
+        const raw = localStorage.getItem(SLOT_KEY(n));
+        if (!raw) { out.push(null); continue; }
+        const d = JSON.parse(raw);
+        out.push({
+          slot: n,
+          systemId: d.currentSystemId,
+          lumens: d.lumens ?? 0,
+          warps: d.stats?.warps ?? 0,
+          mode: d.location?.mode ?? 'space',
+          savedAt: d.savedAt ?? null,
+        });
+      } catch { out.push(null); }
+    }
+    return out;
+  }
+
+  /** most recently saved slot number, or null */
+  static latestSlot() {
+    const saves = GameState.listSaves().filter(Boolean);
+    if (!saves.length) return null;
+    saves.sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0));
+    return saves[0].slot;
+  }
+
+  static load(slot = null) {
+    GameState._migrateLegacy();
+    try {
+      const n = slot ?? GameState.latestSlot();
+      if (!n) return null;
+      const raw = localStorage.getItem(SLOT_KEY(n));
       if (!raw) return null;
       const data = JSON.parse(raw);
       const gs = new GameState(data.galaxySeed);
       Object.assign(gs, data);
+      gs.slot = n;
       return gs;
     } catch (e) { console.error('load failed', e); return null; }
   }
 
-  static clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ } }
+  static clearSave(slot = 1) { try { localStorage.removeItem(SLOT_KEY(slot)); } catch { /* ignore */ } }
 
   /** deterministic RNG stream tied to this playthrough */
   rng(label) { return new RNG(hashString(`${this.galaxySeed}:${label}`)); }

@@ -7,6 +7,7 @@
 import { events } from '../core/events.js';
 import { RNG, hash32, hashString } from '../core/rng.js';
 import { ITEMS } from './items.js';
+import { FACTIONS } from '../universe/lore.js';
 import { audio } from '../audio/audio.js';
 
 // The Signal's story, told in fragments at increasing warp depth.

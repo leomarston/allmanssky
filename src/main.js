@@ -219,10 +219,13 @@ class Game {
   }
 
   async _menuFlow() {
-    const choice = await this.screens.mainMenu({ hasSave: GameState.hasSave() });
+    const choice = await this.screens.mainMenu({
+      hasSave: GameState.hasSave(),
+      saves: GameState.listSaves(),
+    });
     audio.init();
-    if (choice?.action === 'continue') {
-      const loaded = GameState.load();
+    if (choice?.action === 'continue' || choice?.action === 'load') {
+      const loaded = GameState.load(choice.action === 'load' ? choice.slot : null);
       if (loaded) {
         this.bindWorld(loaded);
         if (loaded.location.mode === 'surface') {
@@ -240,8 +243,11 @@ class Game {
     }
     // new voyage
     const seed = choice?.seed ? hashString(String(choice.seed)) : GALAXY_SEED_DEFAULT;
-    GameState.clearSave();
-    this.bindWorld(new GameState(seed));
+    const slot = choice?.slot ?? 1;
+    GameState.clearSave(slot);
+    const fresh = new GameState(seed);
+    fresh.slot = slot;
+    this.bindWorld(fresh);
     await this.switchState('space', { systemId: this.gameState.currentSystemId, mode: 'start' });
     events.emit('notify', { text: 'THE VESPER SIGNAL CALLS. Fly close to a planet and press G to land.', tone: 'info' });
   }
