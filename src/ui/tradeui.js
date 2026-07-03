@@ -179,6 +179,11 @@ export class TradeUI {
           cost: 60, ok: gs.lumens >= 60,
           fn: () => { gs.addLumens(-60); gs.oxygen = gs.oxygenMax; gs.energy = gs.energyMax; gs.shield = gs.shieldMax; },
         },
+        {
+          name: 'Exocraft Geobay', desc: gs.exocraft?.unlocked ? 'Rover licensed — summon with N on any planet' : 'License an all-terrain rover; summon it anywhere with N',
+          cost: 2500, ok: !gs.exocraft?.unlocked && gs.lumens >= 2500,
+          fn: () => { gs.addLumens(-2500); (gs.exocraft ??= {}).unlocked = true; gs.save(); },
+        },
       ];
       for (const s of services) {
         const row = this._row(`<div>${s.name}<div style="font-size:10px;color:var(--ui-dim);">${s.desc}</div></div>`);

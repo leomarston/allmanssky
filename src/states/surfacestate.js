@@ -22,6 +22,7 @@ import { Survival } from '../gameplay/survival.js';
 import { GroundMining } from '../gameplay/mining.js';
 import { Scanner } from '../gameplay/scanner.js';
 import { Language } from '../gameplay/language.js';
+import { RoverController } from '../gameplay/rover.js';
 import { GroundCombat } from '../gameplay/combat.js';
 import { BaseBuilder } from '../gameplay/basebuilding.js';
 import { WeatherSystem } from '../render/weather.js';
@@ -131,6 +132,7 @@ export class SurfaceState {
     this.mining = new GroundMining(this.scene, this.effects, gs, this);
     this.scanner = new Scanner(gs);
     this.language = new Language(gs);
+    this.rover = new RoverController(this.scene, this.field, gs, this.effects);
     this.combat = new GroundCombat(this.scene, this.effects, gs, this);
     this.builder = new BaseBuilder(this.scene, this.field, gs, this.systemId, this.planetIndex);
     this.machines = new MachineRunner(gs);
@@ -306,7 +308,7 @@ export class SurfaceState {
     const cockpitOn = flying && this.shipCtl.viewMode === 'cockpit';
     this.cockpit.group.visible = cockpitOn;
     this.shipObj.group.visible = !cockpitOn;
-    this.arcforge.setVisible(this.mode === 'foot');
+    this.arcforge.setVisible(this.mode === 'foot' && !this.rover.active);
     if (cockpitOn) {
       this.cockpit.update(dt, {
         throttle: this.shipCtl.throttle,
@@ -328,12 +330,30 @@ export class SurfaceState {
 
   _updateFoot(dt, uiOpen, sunElev) {
     const gs = this.ctx.gameState;
+
+    // driving the exocraft — the rover owns the camera; the player rides along
+    if (this.rover.active) {
+      this.trail?.setLevel?.(0);
+      this.rover.update(dt, this.camera);
+      this.player.position.copy(this.rover.position);
+      this._interactLabel = 'F — DISEMBARK EXOCRAFT';
+      if (!uiOpen && input.actionPressed('interact')) this.rover.exit(this.player);
+      return;
+    }
+
     this.player.enabled = !uiOpen;
     this.player.update(dt);
     gs.jetpack = this.player.jetpack;
     gs.stats.distanceOnFoot += this.player.speed * dt;
     audio.engine(0);
     this.trail?.setLevel?.(0);
+
+    // N — summon / board / recall the exocraft
+    if (!uiOpen && gs.exocraft?.unlocked && input.actionPressed('vehicle')) {
+      const r = this.rover, p = this.player.position;
+      if (r.deployed && p.distanceTo(r.position) < 6) r.enter(this.player);
+      else r.summon(p, this.player.yaw);
+    }
 
     if (this.torch.visible) {
       this.torch.position.copy(this.camera.position);
@@ -545,7 +565,9 @@ export class SurfaceState {
       energy: gs.energy / gs.energyMax,
       jetpack: this.player.jetpack,
       lumens: gs.lumens,
-      speed: Math.round(inShip ? this.shipCtl.speed : this.player.speed * 3.6),
+      speed: Math.round(inShip ? this.shipCtl.speed
+        : this.rover.active ? Math.abs(this.rover.speed) * 3.6
+        : this.player.speed * 3.6),
       altitude: Math.round(inShip
         ? this.shipAGL
         : this.player.position.y - this.field.height(this.player.position.x, this.player.position.z)),
@@ -591,6 +613,7 @@ export class SurfaceState {
     this.machines?.dispose?.();
     this.refinerUI?.close?.();
     this.waypoints?.dispose?.();
+    this.rover?.dispose?.();
     this.scene = null;
   }
 }

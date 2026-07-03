@@ -8,7 +8,7 @@ const KEYMAP = {
   interact: ['KeyF'], jump: ['Space'], sprint: ['ShiftLeft'],
   inventory: ['Tab', 'KeyI'], map: ['KeyM'], build: ['KeyB'],
   scan: ['KeyV'], photo: ['KeyP'], land: ['KeyG'], warp: ['KeyJ'], pulse: ['KeyX'],
-  torch: ['KeyT'], escape: ['Escape'], swapWeapon: ['KeyR'],
+  torch: ['KeyT'], escape: ['Escape'], swapWeapon: ['KeyR'], vehicle: ['KeyN'],
 };
 
 class Input {

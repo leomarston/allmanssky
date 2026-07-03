@@ -45,6 +45,7 @@ export class GameState {
     this.bases = [];                   // [{systemId, planetIndex, pieces:[{kind,x,y,z,rotY}]}]
     this.digs = {};                    // planetId → [[x,z,r,d]] terrain excavations
     this.language = { known: [] };     // learned Luminel words
+    this.exocraft = { unlocked: false }; // rover summonable once purchased
     this.stats = { warps: 0, planetsVisited: 0, creaturesScanned: 0, distanceOnFoot: 0 };
   }
 

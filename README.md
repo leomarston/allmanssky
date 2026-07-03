@@ -58,7 +58,7 @@ Mouse look: click once to capture the mouse (a prompt shows until captured);
 game stays controllable even where pointer lock is unavailable.
 On foot: **WASD** move, **Shift** sprint, **Space**
 jump / hold jetpack, **F** interact, **V** scan, **LMB** mine/fire, **R** swap
-Arcforge mode (beam/bolts), **T** headlamp, **B** build mode, **P** photo mode, **Tab**
+Arcforge mode (beam/bolts), **T** headlamp, **B** build mode, **P** photo mode, **N** summon/board exocraft, **Tab**
 inventory, **M** galaxy map. In ship: mouse steer, **W/S** throttle, **Q/E**
 roll, **Shift** boost, **LMB** lasers/mining beam, **G** land (low over ground) / take off,
 **F** dock / board / disembark, **J** warp (needs a Void Cell). **Esc** pause.
