@@ -45,6 +45,29 @@ class Game {
     const unlock = () => { audio.init(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
+
+    // pointer lock MUST be requested synchronously inside the gesture handler:
+    // Safari and Firefox reject requests made later in the frame (e.g. from the
+    // render loop), which left the mouse uncaptured on those browsers.
+    this.canvas.addEventListener('mousedown', () => {
+      if (this.state && !this.paused && !input.pointerLocked && !this.ui?.anyOpen?.()) {
+        input.requestPointerLock();
+      }
+    });
+
+    // visible prompt while the game runs without mouse capture
+    this.lockHint = document.createElement('div');
+    this.lockHint.textContent = 'CLICK TO TAKE CONTROL';
+    this.lockHint.style.cssText = [
+      'position:absolute', 'left:50%', 'top:64%', 'transform:translateX(-50%)',
+      'padding:10px 26px', 'border:1px solid rgba(125,232,255,.55)',
+      'background:rgba(8,20,28,.72)', 'color:#7de8ff', 'letter-spacing:.28em',
+      'font-size:12px', 'font-family:var(--ui-font,system-ui)',
+      'pointer-events:none', 'z-index:30', 'display:none',
+      'animation:ams-pulse 1.6s ease-in-out infinite',
+      'backdrop-filter:blur(6px)',
+    ].join(';');
+    this.uiRoot.appendChild(this.lockHint);
   }
 
   /** cross-state context handed to states */
@@ -205,11 +228,10 @@ class Game {
     const frame = () => {
       requestAnimationFrame(frame);
       const dt = this.engine.tick();
+      this.lockHint.style.display =
+        this.state && !this.paused && !input.pointerLocked && !this.ui?.anyOpen?.()
+          ? 'block' : 'none';
       if (this.state && !this.paused) {
-        // pointer lock on click into the world
-        if (input.mouseClicked[0] && !input.pointerLocked && !this.ui.anyOpen()) {
-          input.requestPointerLock();
-        }
         if (input.actionPressed('escape')) {
           if (this.ui.inventory.isOpen) this.ui.inventory.close();
           else if (this.ui.trade.isOpen) this.ui.trade.close();

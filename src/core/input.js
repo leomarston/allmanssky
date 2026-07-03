@@ -51,16 +51,28 @@ class Input {
       }
     });
     window.addEventListener('wheel', (e) => { this.wheelDelta += Math.sign(e.deltaY); }, { passive: true });
-    document.addEventListener('pointerlockchange', () => {
-      this.pointerLocked = document.pointerLockElement === el;
-    });
+    const syncLock = () => {
+      const locked = document.pointerLockElement ?? document.webkitPointerLockElement ?? document.mozPointerLockElement;
+      this.pointerLocked = locked === el;
+    };
+    document.addEventListener('pointerlockchange', syncLock);
+    document.addEventListener('webkitpointerlockchange', syncLock);
+    document.addEventListener('mozpointerlockchange', syncLock);
   }
 
   requestPointerLock() {
-    if (this._el && !this.pointerLocked) this._el.requestPointerLock?.();
+    const el = this._el;
+    if (!el || this.pointerLocked) return;
+    // Safari/older engines expose prefixed variants; the call may also return a
+    // promise that rejects (e.g. relock cooldown after Esc) — swallow it.
+    const req = el.requestPointerLock || el.webkitRequestPointerLock || el.mozRequestPointerLock;
+    try { req?.call(el)?.catch?.(() => {}); } catch { /* denied — user clicks again */ }
   }
   exitPointerLock() {
-    if (this.pointerLocked) document.exitPointerLock?.();
+    if (this.pointerLocked) {
+      const exit = document.exitPointerLock || document.webkitExitPointerLock || document.mozExitPointerLock;
+      try { exit?.call(document); } catch { /* already unlocked */ }
+    }
   }
 
   /** is a semantic action currently held */
