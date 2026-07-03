@@ -39,10 +39,12 @@ export class ShipController {
 
   update(dt, camera) {
     if (this.enabled) {
-      // -- steering --
+      // -- steering: mouse deltas + arrow keys (full keyboard fallback) --
       const sens = 0.0016 * this.agility;
-      const targetPitch = THREE.MathUtils.clamp(-input.mouseDY * sens * 60, -PITCH_RATE, PITCH_RATE);
-      const targetYaw = THREE.MathUtils.clamp(-input.mouseDX * sens * 60, -YAW_RATE, YAW_RATE);
+      const targetPitch = THREE.MathUtils.clamp(
+        -input.mouseDY * sens * 60 - input.lookY * PITCH_RATE * 0.75, -PITCH_RATE, PITCH_RATE);
+      const targetYaw = THREE.MathUtils.clamp(
+        -input.mouseDX * sens * 60 - input.lookX * YAW_RATE * 0.85, -YAW_RATE, YAW_RATE);
       let targetRoll = 0;
       if (input.action('rollLeft')) targetRoll += ROLL_RATE;
       if (input.action('rollRight')) targetRoll -= ROLL_RATE;

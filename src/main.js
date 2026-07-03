@@ -20,6 +20,8 @@ import { QuestUI } from './ui/questui.js';
 import { BuildUI } from './ui/buildui.js';
 import { audio } from './audio/audio.js';
 
+export const AMS_VERSION = 'v0.5 · drag-look + arrow steering';
+
 class Game {
   constructor() {
     this.canvas = document.getElementById('game-canvas');
@@ -57,19 +59,32 @@ class Game {
       input.requestPointerLock();
     });
 
-    // visible prompt while the game runs without mouse capture
-    this.lockHint = document.createElement('div');
-    this.lockHint.textContent = 'CLICK TO TAKE CONTROL';
+    // visible prompt while the game runs without mouse capture — a real button
+    // so its own mousedown is a guaranteed direct gesture for pointer lock,
+    // regardless of what sits over the canvas
+    this.lockHint = document.createElement('button');
+    this.lockHint.innerHTML = 'CLICK TO TAKE CONTROL<br><span style="font-size:9px;letter-spacing:.18em;opacity:.7;">drag with the mouse held down to steer · arrow keys also turn</span>';
     this.lockHint.style.cssText = [
       'position:absolute', 'left:50%', 'top:64%', 'transform:translateX(-50%)',
-      'padding:10px 26px', 'border:1px solid rgba(125,232,255,.55)',
-      'background:rgba(8,20,28,.72)', 'color:#7de8ff', 'letter-spacing:.28em',
-      'font-size:12px', 'font-family:var(--ui-font,system-ui)',
-      'pointer-events:none', 'z-index:30', 'display:none',
+      'padding:12px 28px', 'border:1px solid rgba(125,232,255,.55)',
+      'background:rgba(8,20,28,.78)', 'color:#7de8ff', 'letter-spacing:.28em',
+      'font-size:12px', 'font-family:var(--ui-font,system-ui)', 'line-height:1.7',
+      'cursor:pointer', 'z-index:30', 'display:none',
       'animation:ams-pulse 1.6s ease-in-out infinite',
       'backdrop-filter:blur(6px)',
     ].join(';');
+    this.lockHint.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      input.requestPointerLock();
+    });
     this.uiRoot.appendChild(this.lockHint);
+
+    // build stamp — verifies which deployment a browser is actually running
+    const ver = document.createElement('div');
+    ver.textContent = AMS_VERSION;
+    ver.style.cssText = 'position:absolute;right:8px;bottom:6px;font-size:9px;letter-spacing:.12em;color:rgba(127,163,180,.5);pointer-events:none;z-index:4;font-family:var(--ui-font,system-ui);';
+    this.uiRoot.appendChild(ver);
+    console.log(`AllMansSky ${AMS_VERSION}`);
   }
 
   /** cross-state context handed to states */
@@ -231,7 +246,7 @@ class Game {
       requestAnimationFrame(frame);
       const dt = this.engine.tick();
       this.lockHint.style.display =
-        this.state && !this.paused && !input.pointerLocked && !this.ui?.anyOpen?.()
+        this.state && !this.paused && !input.aiming && !this.ui?.anyOpen?.()
           ? 'block' : 'none';
       if (this.state && !this.paused) {
         if (input.actionPressed('escape')) {

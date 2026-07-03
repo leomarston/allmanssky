@@ -46,9 +46,9 @@ export class PlayerController {
   update(dt) {
     if (!this.enabled) { this._apply(dt); return; }
 
-    // look
-    this.yaw -= input.mouseDX * this.sensitivity;
-    this.pitch -= input.mouseDY * this.sensitivity;
+    // look: mouse deltas + arrow keys (keyboard turning needs no mouse)
+    this.yaw -= input.mouseDX * this.sensitivity + input.lookX * 2.1 * dt;
+    this.pitch -= input.mouseDY * this.sensitivity + input.lookY * 1.6 * dt;
     this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch));
 
     // wish direction in world space from yaw

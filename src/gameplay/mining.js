@@ -24,7 +24,7 @@ export class GroundMining {
   }
 
   update(dt, camera, surface) {
-    const firing = input.mouseDown[0] && this.gs.tool.mode === 'mine' && input.pointerLocked;
+    const firing = input.mouseDown[0] && this.gs.tool.mode === 'mine' && input.aiming;
     if (!firing) { this._stopBeam(); return; }
 
     const origin = camera.position.clone();
@@ -104,7 +104,7 @@ export class SpaceMining {
   }
 
   update(dt, camera) {
-    const firing = input.mouseDown[0] && input.pointerLocked;
+    const firing = input.mouseDown[0] && input.aiming;
     if (!firing || !this.space.asteroids?.length) { this._stop(); return; }
 
     const shipPos = this.space.shipCtl.position;

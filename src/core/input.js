@@ -28,11 +28,13 @@ class Input {
   attach(el) {
     this._el = el;
     window.addEventListener('keydown', (e) => {
+      // keep browser shortcuts/scrolling from stealing game keys
+      if (['Tab', 'Space', 'ControlLeft', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        e.preventDefault();
+      }
       if (e.repeat) return;
       this.keys.add(e.code);
       this.pressed.add(e.code);
-      // keep browser shortcuts from stealing game keys
-      if (['Tab', 'Space', 'ControlLeft'].includes(e.code)) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
@@ -42,13 +44,25 @@ class Input {
     el.addEventListener('mousedown', (e) => {
       this.mouseDown[e.button] = true;
       this.mouseClicked[e.button] = true;
+      this._dragLook = true; // canvas-originated press → drag steers
     });
-    window.addEventListener('mouseup', (e) => { this.mouseDown[e.button] = false; });
+    window.addEventListener('mouseup', (e) => {
+      this.mouseDown[e.button] = false;
+      if (!this.mouseDown.some(Boolean)) this._dragLook = false;
+    });
     window.addEventListener('mousemove', (e) => {
-      if (this.pointerLocked) {
-        this.mouseDX += e.movementX;
-        this.mouseDY += e.movementY;
+      // pointer lock is the primary path; drag-look is the guaranteed fallback
+      // so the game stays steerable even where lock is denied or unavailable
+      if (this.pointerLocked || this._dragLook) {
+        // movementX is undefined on unlocked moves in some engines — fall back
+        // to screen-coordinate deltas
+        const mx = e.movementX ?? (this._lastSX == null ? 0 : e.screenX - this._lastSX);
+        const my = e.movementY ?? (this._lastSY == null ? 0 : e.screenY - this._lastSY);
+        this.mouseDX += mx;
+        this.mouseDY += my;
       }
+      this._lastSX = e.screenX;
+      this._lastSY = e.screenY;
     });
     window.addEventListener('wheel', (e) => { this.wheelDelta += Math.sign(e.deltaY); }, { passive: true });
     const syncLock = () => {
@@ -74,6 +88,13 @@ class Input {
       try { exit?.call(document); } catch { /* already unlocked */ }
     }
   }
+
+  /** true when mouse-look is live — pointer lock OR the drag-look fallback */
+  get aiming() { return this.pointerLocked || !!this._dragLook; }
+
+  /** arrow-key look axis, -1..1 — keyboard steering that needs no mouse at all */
+  get lookX() { return (this.keys.has('ArrowRight') ? 1 : 0) - (this.keys.has('ArrowLeft') ? 1 : 0); }
+  get lookY() { return (this.keys.has('ArrowDown') ? 1 : 0) - (this.keys.has('ArrowUp') ? 1 : 0); }
 
   /** is a semantic action currently held */
   action(name) {

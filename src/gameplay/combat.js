@@ -135,7 +135,7 @@ export class GroundCombat {
 
     // player bolt fire (Arcforge bolt caster; suppressed while build mode owns LMB)
     if (gs.tool.mode === 'bolt' && !this.suppressFire
-      && input.mouseDown[0] && input.pointerLocked && this._fireCd <= 0) {
+      && input.mouseDown[0] && input.aiming && this._fireCd <= 0) {
       this._fireCd = 0.24 / (1 + (gs.upgrades.toolBolt ?? 0) * 0.35);
       const dir = camera.getWorldDirection(_v1.set(0, 0, 0)).clone();
       dir.x += (Math.random() - 0.5) * 0.012;
@@ -348,7 +348,7 @@ export class SpaceCombat {
     }
 
     // player fire: LMB fires nose bolts with soft aim assist
-    if (input.mouseDown[0] && input.pointerLocked && this._fireCd <= 0 && this.hasHostiles) {
+    if (input.mouseDown[0] && input.aiming && this._fireCd <= 0 && this.hasHostiles) {
       this._fireCd = 0.22;
       const fwd = this.shipCtl.forward.clone();
       let dir = fwd;

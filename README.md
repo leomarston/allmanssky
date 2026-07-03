@@ -53,7 +53,10 @@ isolation (planets, terrain, creatures, ships, UI, galaxy map…).
 
 ## Controls
 
-Pointer-lock mouse look. On foot: **WASD** move, **Shift** sprint, **Space**
+Mouse look: click once to capture the mouse (a prompt shows until captured);
+**dragging with the button held** and the **arrow keys** also steer, so the
+game stays controllable even where pointer lock is unavailable.
+On foot: **WASD** move, **Shift** sprint, **Space**
 jump / hold jetpack, **F** interact, **V** scan, **LMB** mine/fire, **R** swap
 Arcforge mode (beam/bolts), **T** headlamp, **B** build mode, **Tab**
 inventory, **M** galaxy map. In ship: mouse steer, **W/S** throttle, **Q/E**

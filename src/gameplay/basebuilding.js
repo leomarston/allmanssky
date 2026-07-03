@@ -250,7 +250,7 @@ export class BaseBuilder {
     });
 
     // place
-    if (input.mouseClicked[0] && input.pointerLocked && this._ghostOk) {
+    if (input.mouseClicked[0] && input.aiming && this._ghostOk) {
       const cost = piece.cost.map(([id, qty]) => ({ id, qty }));
       if (this.gs.removeItems(cost)) {
         if (!this.base) {
@@ -272,7 +272,7 @@ export class BaseBuilder {
     }
 
     // remove aimed own piece
-    if (input.mouseClicked[2] && input.pointerLocked) {
+    if (input.mouseClicked[2] && input.aiming) {
       let best = null, bestD = 6;
       for (const p of this.placed) {
         const d = p.mesh.position.distanceTo(this.ghost.position);
