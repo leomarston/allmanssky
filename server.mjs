@@ -29,15 +29,26 @@ const MIME = {
 };
 const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.map', '.md']);
 
+// Game files carry no cache-busting hashes, so anything but vendored libs must
+// revalidate on every load — otherwise browsers keep playing hour-old builds
+// after a deploy. no-cache + Last-Modified/304 keeps revalidation nearly free.
 function cacheHeader(path) {
-  if (path.includes('/vendor/')) return 'public, max-age=604800, immutable'; // pinned three.js
-  if (path.endsWith('.html') || path === '/') return 'no-cache';
-  return 'public, max-age=3600';
+  if (path.includes('/vendor/')) return 'public, max-age=86400'; // pinned three.js
+  return 'no-cache';
 }
 
 const server = createServer(async (req, res) => {
   try {
     const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    // deployment probe: /version answers with the build id, bypassing all caches
+    if (urlPath === '/version') {
+      const src = await readFile(join(ROOT, 'src/core/version.js'), 'utf8').catch(() => '');
+      const ver = /AMS_VERSION = '([^']+)'/.exec(src)?.[1] ?? 'unknown';
+      const note = /AMS_VERSION_NOTE = '([^']+)'/.exec(src)?.[1] ?? '';
+      res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+      res.end(`AllMansSky ${ver} — ${note}\n`);
+      return;
+    }
     let rel = urlPath === '/' ? '/index.html' : urlPath;
     // resolve inside ROOT only — no traversal
     const file = resolve(join(ROOT, normalize(rel)));
@@ -51,9 +62,18 @@ const server = createServer(async (req, res) => {
       return;
     }
     const ext = extname(file).toLowerCase();
+    const lastMod = new Date(info.mtimeMs).toUTCString();
+    // cheap revalidation: 304 when the browser's copy is still current
+    const ims = req.headers['if-modified-since'];
+    if (ims && new Date(ims).getTime() >= Math.floor(info.mtimeMs / 1000) * 1000) {
+      res.writeHead(304, { 'Last-Modified': lastMod, 'Cache-Control': cacheHeader(urlPath) });
+      res.end();
+      return;
+    }
     const headers = {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
       'Cache-Control': cacheHeader(urlPath),
+      'Last-Modified': lastMod,
       'X-Content-Type-Options': 'nosniff',
     };
     const wantsGzip = COMPRESSIBLE.has(ext)
