@@ -125,17 +125,24 @@ void main() {
   vec3 n = normalize(vec3(w1 * 0.5 + w2 * 0.35 + sx, 2.4, w2 * 0.5 - w1 * 0.28 + sz));
   vec3 V = normalize(cameraPosition - vWorld);
   vec3 col = mix(uShallow, uDeep, smoothstep(0.03, 0.55, depth01));
+  // subsurface teal scatter in the shallows / wave crests
+  col += uShallow * (1.0 - smoothstep(0.0, 0.4, depth01)) * 0.12;
   #ifdef USE_FOG
-  float fres = pow(1.0 - max(dot(V, n), 0.0), 3.0);
-  col = mix(col, fogColor, 0.22 + 0.5 * fres); // sky reflection ≈ horizon/fog color
+  // gradient sky reflection: the reflected ray sees a brighter, bluer zenith when
+  // it points up and the horizon/fog colour near grazing — Fresnel-weighted
+  vec3 Rsky = reflect(-V, n);
+  vec3 skyRefl = mix(fogColor, fogColor * 1.5 + vec3(0.03, 0.05, 0.10), clamp(Rsky.y, 0.0, 1.0));
+  float fres = pow(1.0 - max(dot(V, n), 0.0), 4.0);
+  col = mix(col, skyRefl, 0.24 + 0.62 * fres);
   #endif
   vec3 R = reflect(-uSunDir, n);
-  float spec = pow(max(dot(R, V), 0.0), 140.0);
-  col += uSunCol * spec * 2.2; // HDR glints feed bloom
+  float spec = pow(max(dot(R, V), 0.0), 160.0);
+  float gloss = pow(max(dot(R, V), 0.0), 22.0);
+  col += uSunCol * (spec * 2.6 + gloss * 0.55); // tight glint + broad sheen, HDR→bloom
   float foam = smoothstep(0.05, 0.004, depth01);
   foam *= 0.4 + 0.35 * snoise(p * 0.9 + vec2(t * 0.25, -t * 0.2));
   foam = clamp(foam, 0.0, 1.0);
-  col = mix(col, vec3(0.88, 0.93, 0.95), foam * 0.55);
+  col = mix(col, vec3(0.9, 0.95, 0.97), foam * 0.68);
   float alpha = mix(0.58, 0.93, smoothstep(0.0, 0.3, depth01));
   alpha = max(alpha, foam * 0.75);
   gl_FragColor = vec4(col, alpha);
