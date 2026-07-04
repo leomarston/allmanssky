@@ -1,8 +1,10 @@
-// Procedural fauna assembler: builds a low-poly rounded creature from
-// parametric parts (torso, articulated legs, heads, tails, fins, wings,
-// tentacles) with seeded per-vertex paint (belly-light / back-dark gradient,
-// biome accent stripes or spots). No skeletons — gait is per-limb transform
-// animation driven by animate(dt, speed01). Fully deterministic from the seed.
+// Procedural fauna assembler: builds a rounded, articulated creature from
+// parametric parts (multi-segment torso, jointed legs with thigh/knee/foot,
+// snouted heads with hinged jaws, tapered tails, fins, wings, tentacles) with
+// seeded per-vertex paint (belly-light / back-dark countershading + biome
+// pattern) and optional biome-driven bioluminescent markings + glowing eyes
+// that feed bloom. No skeletons — gait is per-limb transform animation driven
+// by animate(dt, speed01). Fully deterministic from the seed.
 import * as THREE from 'three';
 import { RNG, hash32 } from '../core/rng.js';
 import { SimplexNoise } from '../core/noise.js';
@@ -96,8 +98,8 @@ function latinName(rng) {
 
 /**
  * Bakes vertex colors over the whole assembled creature. Meshes opt in via
- * userData.paint: 'skin' (gradient + pattern), 'accent', 'bone', 'dark',
- * 'wing' (span gradient); 'none' skips (emissive eyes, lures).
+ * userData.paint: 'skin' (gradient + pattern), 'accent' (mottled), 'bone',
+ * 'dark', 'wing' (span gradient); 'none' skips (emissive eyes, lures, marks).
  */
 function paintCreature(root, style) {
   root.updateMatrixWorld(true);
@@ -121,7 +123,7 @@ function paintCreature(root, style) {
   if (!isFinite(minY)) { minY = 0; maxY = 1; }
   const spanY = Math.max(maxY - minY, 1e-3);
 
-  const { belly, back, accent, bone, dark, noise, mode, patScale } = style;
+  const { belly, back, accent, accent2, bone, dark, noise, mode, patScale, countershade } = style;
   const col = new THREE.Color();
 
   for (const mesh of meshes) {
@@ -133,16 +135,12 @@ function paintCreature(root, style) {
       v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
       if (kind === 'skin') {
         const t = smooth01((v.y - minY) / spanY);
-        col.copy(belly).lerp(back, t);
-        if (mode === 'stripes') {
-          const n = noise.noise3D(v.x * 0.6, v.y * 0.8, v.z * patScale);
-          if (n > 0.12) col.lerp(accent, 0.62);
-        } else if (mode === 'spots') {
-          const n = noise.noise3D(v.x * patScale, v.y * patScale, v.z * patScale);
-          if (n > 0.40) col.lerp(accent, 0.58);
-        }
+        col.copy(belly).lerp(back, Math.pow(t, countershade));
+        paintPattern(col, v, mode, accent, accent2, noise, patScale);
       } else if (kind === 'accent') {
         col.copy(accent);
+        const n = noise.noise3D(v.x * 2.4, v.y * 2.4, v.z * 2.4);
+        if (n > 0.28) col.lerp(accent2, 0.4);
       } else if (kind === 'bone') {
         col.copy(bone);
       } else if (kind === 'dark') {
@@ -151,8 +149,8 @@ function paintCreature(root, style) {
         const span = mesh.userData.span || 1;
         const t = clamp01(Math.abs(v.x) / span);
         col.copy(back).lerp(accent, Math.pow(t, 1.4) * 0.85);
-        const n = noise.noise2D(Math.abs(v.x) * 4.0, v.z * 2.0);
-        if (n > 0.35) col.lerp(accent, 0.4);
+        const n = noise.noise2D(Math.abs(v.x) * 4.0, v.z * 2.0);  // membrane veins
+        if (n > 0.35) col.lerp(accent2, 0.45);
       }
       // organic micro-variation
       const shade = 1 + 0.10 * noise.noise3D(v.x * 3.3, v.y * 3.3, v.z * 3.3);
@@ -161,6 +159,28 @@ function paintCreature(root, style) {
       colors[i * 3 + 2] = Math.min(col.b * shade, 1);
     }
     geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  }
+}
+
+/** Two-tone skin patterning driven by seeded noise. Mutates `col` in place. */
+function paintPattern(col, v, mode, accent, accent2, noise, patScale) {
+  if (mode === 'stripes') {
+    const warp = noise.noise3D(v.x * 0.5, v.y * 0.6, v.z * 0.3) * 0.8;
+    const s = Math.sin((v.z + warp) * patScale * 2.1);
+    if (s > 0.35) col.lerp(accent, 0.6);
+    else if (s < -0.6) col.lerp(accent2, 0.3);
+  } else if (mode === 'spots') {
+    const n = noise.noise3D(v.x * patScale, v.y * patScale, v.z * patScale);
+    if (n > 0.42) col.lerp(accent, 0.6);
+  } else if (mode === 'rosettes') {
+    const n = noise.noise3D(v.x * patScale * 0.8, v.y * patScale * 0.8, v.z * patScale * 0.8);
+    const a = Math.abs(n);
+    if (a > 0.55) col.lerp(accent, 0.55);         // filled center
+    else if (a > 0.38) col.lerp(accent2, 0.4);    // ring
+  } else if (mode === 'patches') {
+    const n = noise.fbm3(v.x * patScale * 0.4, v.y * patScale * 0.4, v.z * patScale * 0.4, 3);
+    if (n > 0.14) col.lerp(accent, smooth01((n - 0.14) * 3) * 0.6);
+    else if (n < -0.2) col.lerp(accent2, 0.28);
   }
 }
 
@@ -178,17 +198,57 @@ function addMesh(ctx, geom, parent, { pos, rot, scale, paint = 'skin', mat } = {
 }
 
 function capsule(r, len, cs = 5, rs = 10) { return new THREE.CapsuleGeometry(r, len, cs, rs); }
-function sphere(r, w = 12, h = 9) { return new THREE.SphereGeometry(r, w, h); }
+function sphere(r, w = 12, h = 10) { return new THREE.SphereGeometry(r, w, h); }
 function cone(r, h, s = 8) { return new THREE.ConeGeometry(r, h, s); }
 
-/** Two-segment articulated leg. Returns { hip, knee } pivots. */
-function makeLeg(ctx, parent, { x, y, z, upper, lower, r, hipRest = 0.15, kneeRest = -0.32, splay = 0 }) {
+/**
+ * Scale a geometry's cross-section (x,y) along its own z extent by profile(t),
+ * t∈[0,1] back→front. Turns a capsule into a shaped body/snout. Cheap, one-off.
+ */
+function taperZ(geom, profile) {
+  const pos = geom.attributes.position;
+  let zmin = Infinity, zmax = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const z = pos.getZ(i); if (z < zmin) zmin = z; if (z > zmax) zmax = z;
+  }
+  const span = Math.max(zmax - zmin, 1e-4);
+  for (let i = 0; i < pos.count; i++) {
+    const s = profile((pos.getZ(i) - zmin) / span);
+    pos.setX(i, pos.getX(i) * s);
+    pos.setY(i, pos.getY(i) * s);
+  }
+  pos.needsUpdate = true;
+  geom.computeVertexNormals();
+  return geom;
+}
+
+/**
+ * Row of small emissive nodes along a segment (biome bioluminescence). No-op
+ * unless ctx.biolum. Emissive > 1 so it feeds bloom.
+ */
+function makeGlowMarks(ctx, parent, { from, to, n, r }) {
+  if (!ctx.biolum) return;
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0.5 : i / (n - 1);
+    addMesh(ctx, sphere(r, 6, 5), parent, {
+      pos: [from[0] + (to[0] - from[0]) * t,
+        from[1] + (to[1] - from[1]) * t,
+        from[2] + (to[2] - from[2]) * t],
+      paint: 'none', mat: ctx.markMat,
+    });
+  }
+}
+
+/** Two-segment articulated leg: thigh muscle + upper/lower bones + jointed foot. */
+function makeLeg(ctx, parent, { x, y, z, upper, lower, r, hipRest = 0.15, kneeRest = -0.32, splay = 0, toes = 0 }) {
   const hip = new THREE.Group();
   hip.position.set(x, y, z);
   hip.rotation.x = hipRest;
   hip.rotation.z = splay;
   parent.add(hip);
 
+  // thigh muscle bulge
+  addMesh(ctx, sphere(r * 1.7, 8, 6), hip, { pos: [0, -upper * 0.28, 0], scale: [1.0, 1.3, 1.1] });
   const up = capsule(r, upper);
   up.translate(0, -upper / 2, 0);
   addMesh(ctx, up, hip);
@@ -198,19 +258,31 @@ function makeLeg(ctx, parent, { x, y, z, upper, lower, r, hipRest = 0.15, kneeRe
   knee.rotation.x = kneeRest;
   hip.add(knee);
 
+  addMesh(ctx, sphere(r * 0.95, 7, 5), knee, { paint: 'dark' }); // knee joint
   const lo = capsule(r * 0.72, lower);
   lo.translate(0, -lower / 2, 0);
   addMesh(ctx, lo, knee);
 
-  // foot
+  // foot pad + optional splayed toes
   addMesh(ctx, sphere(r * 1.05, 8, 6), knee, {
     pos: [0, -lower, r * 0.3], scale: [1.1, 0.55, 1.5], paint: 'dark',
   });
+  for (let t = 0; t < toes; t++) {
+    const a = (t - (toes - 1) / 2) * 0.55;
+    addMesh(ctx, cone(r * 0.4, r * 1.0, 5), knee, {
+      pos: [Math.sin(a) * r * 0.7, -lower - r * 0.05, r * 0.35 + Math.cos(a) * r * 0.85],
+      rot: [Math.PI / 2.1, 0, 0], paint: 'bone',
+    });
+  }
   return { hip, knee, rest: { hip: hipRest, knee: kneeRest, splay } };
 }
 
-/** Head on a neck pivot. Variants: beaked | horned | bulbous | antlered. */
-function makeHead(ctx, parent, { x = 0, y, z, r, variant, neckLen = 0 }) {
+/**
+ * Head on a neck pivot with a snouted/beaked/bulbous/antlered face, brow
+ * ridges, hinged lower jaw and pupilled eyes. Returns { neck, head, skull, jaw }.
+ */
+function makeHead(ctx, parent, { x = 0, y, z, r, variant, neckLen = 0, fanged = false }) {
+  const rng = ctx.rng;
   const neck = new THREE.Group();
   neck.position.set(x, y, z);
   parent.add(neck);
@@ -226,13 +298,47 @@ function makeHead(ctx, parent, { x = 0, y, z, r, variant, neckLen = 0 }) {
   neck.add(head);
 
   const isBulb = variant === 'bulbous';
+  const isBeak = variant === 'beaked';
   const skull = addMesh(ctx, sphere(r), head, {
-    scale: isBulb ? [1.25, 1.15, 1.2] : [0.9, 0.85, 1.1],
+    scale: isBulb ? [1.25, 1.15, 1.2] : [0.92, 0.9, 1.14],
   });
 
-  if (variant === 'beaked') {
+  // muzzle / snout (skip for beak & bulb faces)
+  if (!isBulb && !isBeak) {
+    const mlen = r * 1.15;
+    const mg = capsule(r * 0.58, mlen * 0.45, 5, 10);
+    mg.rotateX(Math.PI / 2);
+    mg.translate(0, 0, mlen * 0.35);
+    taperZ(mg, (t) => 0.55 + 0.6 * (1 - t)); // narrows toward the nose
+    addMesh(ctx, mg, head, { pos: [0, -r * 0.14, r * 0.42], scale: [0.92, 0.82, 1] });
+    for (const s of [-1, 1]) {
+      addMesh(ctx, sphere(r * 0.06, 5, 4), head, { pos: [s * r * 0.16, -r * 0.08, r * 1.12], paint: 'dark' });
+    }
+  }
+
+  // hinged lower jaw (rests closed; builders may nudge it for breathing)
+  const jaw = new THREE.Group();
+  jaw.position.set(0, -r * 0.32, r * 0.12);
+  head.add(jaw);
+  const jl = isBulb ? r * 0.55 : r * 0.95;
+  const jg = capsule(r * 0.4, jl * 0.5, 4, 8);
+  jg.rotateX(Math.PI / 2);
+  jg.translate(0, 0, jl * 0.4);
+  addMesh(ctx, jg, jaw, { scale: [0.82, 0.55, 1], paint: 'dark' });
+
+  // brow ridges — read as a face under key light
+  for (const s of [-1, 1]) {
+    addMesh(ctx, sphere(r * 0.24, 6, 5), head, {
+      pos: [s * r * 0.46, r * 0.3, r * 0.5], scale: [1.2, 0.5, 1.3],
+    });
+  }
+
+  if (isBeak) {
     addMesh(ctx, cone(r * 0.42, r * 1.5, 7), head, {
-      pos: [0, -r * 0.12, r * 1.2], rot: [Math.PI / 2, 0, 0], paint: 'bone',
+      pos: [0, -r * 0.05, r * 1.15], rot: [Math.PI / 2, 0, 0], paint: 'bone',
+    });
+    addMesh(ctx, cone(r * 0.3, r * 0.9, 6), jaw, {
+      pos: [0, 0, jl * 0.55], rot: [Math.PI / 2, 0, 0], paint: 'bone',
     });
   } else if (variant === 'horned') {
     for (const s of [-1, 1]) {
@@ -240,7 +346,6 @@ function makeHead(ctx, parent, { x = 0, y, z, r, variant, neckLen = 0 }) {
         pos: [s * r * 0.55, r * 0.72, -r * 0.1], rot: [-0.5, 0, s * 0.55], paint: 'bone',
       });
     }
-    addMesh(ctx, sphere(r * 0.5, 8, 6), head, { pos: [0, -r * 0.2, r * 0.85], scale: [0.9, 0.7, 1.1] });
   } else if (variant === 'antlered') {
     for (const s of [-1, 1]) {
       const base = new THREE.Group();
@@ -260,19 +365,40 @@ function makeHead(ctx, parent, { x = 0, y, z, r, variant, neckLen = 0 }) {
         });
       }
     }
-    addMesh(ctx, sphere(r * 0.45, 8, 6), head, { pos: [0, -r * 0.22, r * 0.8], scale: [0.9, 0.7, 1.2] });
+  } else if (isBulb) {
+    for (const s of [-1, 1]) {
+      addMesh(ctx, sphere(r * 0.3, 8, 6), head, { pos: [s * r * 0.85, 0, r * 0.3], scale: [0.8, 1, 0.8] });
+    }
   }
 
-  // eyes
-  const eyeR = r * (isBulb ? 0.34 : 0.2);
-  const mat = ctx.glowEyes ? ctx.glowEyeMat : ctx.eyeMat;
+  // ears — for beaked/horned faces sometimes, extra silhouette variety
+  if ((isBeak || variant === 'horned') && rng.chance(0.5)) {
+    for (const s of [-1, 1]) {
+      addMesh(ctx, cone(r * 0.16, r * 0.8, 5), head, {
+        pos: [s * r * 0.5, r * 0.5, -r * 0.2], rot: [-0.3, 0, s * 0.5], paint: 'skin',
+      });
+    }
+  }
+
+  if (fanged) {
+    for (const s of [-1, 1]) {
+      addMesh(ctx, cone(r * 0.08, r * 0.42, 4), head, {
+        pos: [s * r * 0.26, -r * 0.4, r * 0.92], rot: [Math.PI, 0, 0], paint: 'bone',
+      });
+    }
+  }
+
+  // eyes + dark pupils (glow eyes bloom; pupil reads as a highlight/iris break)
+  const eyeR = r * (isBulb ? 0.34 : 0.22);
+  const emat = ctx.glowEyes ? ctx.glowEyeMat : ctx.eyeMat;
   for (const s of [-1, 1]) {
-    addMesh(ctx, sphere(eyeR, 8, 6), head, {
-      pos: [s * r * (isBulb ? 0.62 : 0.68), r * 0.22, r * (isBulb ? 0.72 : 0.55)],
-      paint: 'none', mat,
+    const ex = s * r * (isBulb ? 0.62 : 0.64), ey = r * 0.26, ez = r * (isBulb ? 0.72 : 0.66);
+    addMesh(ctx, sphere(eyeR, 10, 8), head, { pos: [ex, ey, ez], paint: 'none', mat: emat });
+    addMesh(ctx, sphere(eyeR * 0.48, 6, 5), head, {
+      pos: [ex + s * eyeR * 0.08, ey, ez + eyeR * 0.72], paint: 'none', mat: ctx.pupilMat,
     });
   }
-  return { neck, head, skull };
+  return { neck, head, skull, jaw };
 }
 
 /** Tapering tail chain of pivots. Returns pivots array (root first). */
@@ -311,7 +437,8 @@ function makeBackFeature(ctx, parent, { kind, topY, zFrom, zTo, h, n = 5 }) {
       });
     } else if (kind === 'plates') {
       addMesh(ctx, sphere(h * 0.42, 7, 5), parent, {
-        pos: [0, topY + h * 0.12 * f, z], scale: [0.35, 0.9 + f * 0.5, 0.7], paint: 'accent',
+        pos: [0, topY + h * 0.12 * f, z], scale: [0.35, 0.9 + f * 0.5, 0.7],
+        paint: 'accent', mat: ctx.shellMat,
       });
     } else if (kind === 'fin') {
       addMesh(ctx, sphere(h * 0.5, 7, 5), parent, {
@@ -346,33 +473,39 @@ function makeWingGeometry(rng, span, chord) {
 function buildQuadruped(ctx) {
   const { rng, body, root } = ctx;
   const barrel = rng.chance(0.55);
-  const torsoLen = rng.range(0.9, 1.35);
-  const torsoR = barrel ? rng.range(0.28, 0.4) : rng.range(0.17, 0.26);
-  const hipY = rng.range(0.55, 0.85);
+  const torsoLen = rng.range(0.9, 1.4);
+  const torsoR = barrel ? rng.range(0.28, 0.42) : rng.range(0.17, 0.26);
+  const hipY = rng.range(0.55, 0.9);
+  const legLen = rng.range(0.9, 1.15); // proportion knob: stocky ↔ leggy
 
   const tg = capsule(torsoR, torsoLen, 6, 12);
   tg.rotateX(Math.PI / 2);
+  taperZ(tg, (t) => 0.85 + 0.22 * Math.sin(Math.PI * t)); // chest/haunch, thinner mid
   const torso = addMesh(ctx, tg, body, { pos: [0, hipY, 0], scale: [1, barrel ? 1.12 : 1, 1] });
+  // shoulder mass where the neck meets the body
+  addMesh(ctx, sphere(torsoR * 1.05, 10, 8), body, {
+    pos: [0, hipY + torsoR * 0.2, torsoLen * 0.34], scale: [1, 1.05, 0.9],
+  });
 
   const legR = Math.min(torsoR * 0.32, 0.09) + 0.02;
   const legs = [];
   const phases = [0, Math.PI, Math.PI, 0]; // trot: FL, FR, BL, BR
-  const lx = torsoR * 0.78;
+  const lx = torsoR * 0.82;
   const lz = torsoLen * 0.42;
   const spots = [[-lx, lz], [lx, lz], [-lx, -lz], [lx, -lz]];
   for (let i = 0; i < 4; i++) {
     legs.push(makeLeg(ctx, root, {
       x: spots[i][0], y: hipY, z: spots[i][1],
-      upper: hipY * 0.52, lower: hipY * 0.5, r: legR,
-      hipRest: 0.12, kneeRest: -0.3,
+      upper: hipY * 0.52 * legLen, lower: hipY * 0.5 * legLen, r: legR,
+      hipRest: 0.12, kneeRest: -0.3, toes: 3,
     }));
   }
 
-  const headR = torsoR * rng.range(0.75, 1.0);
-  const { neck } = makeHead(ctx, body, {
+  const headR = torsoR * rng.range(0.75, 1.05);
+  const { neck, jaw } = makeHead(ctx, body, {
     y: hipY + torsoR * 0.45, z: torsoLen * 0.5, r: headR,
     variant: rng.pick(['beaked', 'horned', 'bulbous', 'antlered']),
-    neckLen: rng.range(0.15, 0.45),
+    neckLen: rng.range(0.15, 0.5), fanged: rng.chance(0.3),
   });
   const tail = makeTail(ctx, body, {
     y: hipY + torsoR * 0.1, z: -torsoLen * 0.52, r: torsoR * 0.45,
@@ -383,9 +516,15 @@ function buildQuadruped(ctx) {
     topY: hipY + torsoR * 0.9, zFrom: torsoLen * 0.4, zTo: -torsoLen * 0.42,
     h: torsoR * 1.2, n: rng.int(4, 6),
   });
+  for (const s of [-1, 1]) {
+    makeGlowMarks(ctx, body, {
+      from: [s * torsoR * 0.92, hipY + torsoR * 0.1, torsoLen * 0.3],
+      to: [s * torsoR * 0.92, hipY - torsoR * 0.1, -torsoLen * 0.4], n: 4, r: torsoR * 0.09,
+    });
+  }
 
   const bodyBase = 0;
-  return (T, TI, m, dt) => {
+  return (T, TI, m) => {
     for (let i = 0; i < 4; i++) {
       const L = legs[i], ph = phases[i];
       const sw = Math.sin(T + ph);
@@ -397,6 +536,7 @@ function buildQuadruped(ctx) {
     torso.scale.x = 1 + 0.03 * Math.sin(TI * 1.7) * (1 - m * 0.6);
     neck.rotation.y = Math.sin(TI * 0.55) * 0.35 * (1 - m * 0.55);
     neck.rotation.x = Math.sin(T * 2) * 0.05 * m + Math.sin(TI * 0.9) * 0.05;
+    jaw.rotation.x = 0.03 + Math.max(0, Math.sin(TI * 0.8)) * 0.12 * (1 - m * 0.5);
     for (let j = 0; j < tail.length; j++) {
       tail[j].rotation.y = Math.sin(TI * 1.7 + j * 0.7) * 0.14 + Math.sin(T + j) * 0.1 * m;
     }
@@ -405,10 +545,10 @@ function buildQuadruped(ctx) {
 
 function buildHopper(ctx) {
   const { rng, body, root } = ctx;
-  const hipY = rng.range(0.5, 0.75);
-  const tr = rng.range(0.22, 0.32);
+  const hipY = rng.range(0.5, 0.78);
+  const tr = rng.range(0.22, 0.34);
 
-  const torso = addMesh(ctx, sphere(tr, 12, 10), body, {
+  const torso = addMesh(ctx, sphere(tr, 14, 12), body, {
     pos: [0, hipY + tr * 0.35, 0], scale: [0.85, 1.2, 1.05], rot: [0.25, 0, 0],
   });
 
@@ -417,7 +557,7 @@ function buildHopper(ctx) {
     legs.push(makeLeg(ctx, root, {
       x: s * tr * 0.75, y: hipY, z: -tr * 0.35,
       upper: hipY * 0.72, lower: hipY * 0.7, r: tr * 0.28,
-      hipRest: -0.85, kneeRest: 1.5,
+      hipRest: -0.85, kneeRest: 1.5, toes: 2,
     }));
   }
   // small arms
@@ -433,12 +573,15 @@ function buildHopper(ctx) {
     arms.push(arm);
   }
 
-  const { neck } = makeHead(ctx, body, {
-    y: hipY + tr * 1.25, z: tr * 0.55, r: tr * rng.range(0.6, 0.8),
+  const { neck, jaw } = makeHead(ctx, body, {
+    y: hipY + tr * 1.25, z: tr * 0.55, r: tr * rng.range(0.6, 0.82),
     variant: rng.pick(['beaked', 'bulbous', 'horned']), neckLen: tr * 0.3,
   });
   const tail = makeTail(ctx, body, {
     y: hipY + tr * 0.1, z: -tr * 0.8, r: tr * 0.4, segLen: rng.range(0.28, 0.4), segs: 3, droop: 0.45,
+  });
+  makeGlowMarks(ctx, body, {
+    from: [0, hipY + tr, tr * 0.3], to: [0, hipY - tr * 0.2, tr * 0.3], n: 3, r: tr * 0.08,
   });
 
   return (T, TI, m) => {
@@ -454,6 +597,7 @@ function buildHopper(ctx) {
     }
     torso.scale.y = 1.2 + 0.035 * Math.sin(TI * 2.0) * (1 - m * 0.5);
     neck.rotation.y = Math.sin(TI * 0.7) * 0.4 * (1 - m * 0.6);
+    jaw.rotation.x = 0.04 + Math.max(0, Math.sin(TI * 1.1)) * 0.14 * (1 - m * 0.5);
     for (let j = 0; j < tail.length; j++) {
       tail[j].rotation.x = -0.45 + hop * 0.35 * m + Math.sin(TI * 1.9 + j) * 0.06;
     }
@@ -464,17 +608,25 @@ function buildHexapod(ctx) {
   const { rng, body, root } = ctx;
   const len = rng.range(0.7, 1.05);
   const r = rng.range(0.18, 0.26);
-  const bodyY = rng.range(0.3, 0.4);
+  const bodyY = rng.range(0.3, 0.42);
 
   const tg = capsule(r, len, 5, 10);
   tg.rotateX(Math.PI / 2);
+  taperZ(tg, (t) => 0.8 + 0.3 * Math.sin(Math.PI * t)); // segmented thorax feel
   addMesh(ctx, tg, body, { pos: [0, bodyY, 0], scale: [1.15, 0.8, 1] });
 
-  if (rng.chance(0.55)) { // shell dome
+  if (rng.chance(0.6)) { // chitinous shell dome
     const dome = sphere(r * 1.5, 12, 6);
     addMesh(ctx, dome, body, {
-      pos: [0, bodyY + r * 0.15, 0], scale: [1.0, 0.62, len / (r * 1.9)], paint: 'accent',
+      pos: [0, bodyY + r * 0.15, 0], scale: [1.0, 0.62, len / (r * 1.9)],
+      paint: 'accent', mat: ctx.shellMat,
     });
+    for (const s of [-1, 1]) {
+      makeGlowMarks(ctx, body, {
+        from: [s * r * 1.0, bodyY + r * 0.1, len * 0.2],
+        to: [s * r * 1.0, bodyY + r * 0.1, -len * 0.3], n: 3, r: r * 0.1,
+      });
+    }
   }
 
   const legs = [];
@@ -492,9 +644,10 @@ function buildHexapod(ctx) {
     }
   }
 
-  const { neck, head } = makeHead(ctx, body, {
-    y: bodyY + r * 0.25, z: len * 0.52, r: r * 0.75,
+  const { neck, head, jaw } = makeHead(ctx, body, {
+    y: bodyY + r * 0.25, z: len * 0.52, r: r * 0.78,
     variant: rng.pick(['bulbous', 'horned', 'beaked']), neckLen: 0.05,
+    fanged: rng.chance(0.4),
   });
   // antennae
   for (const s of [-1, 1]) {
@@ -516,6 +669,7 @@ function buildHexapod(ctx) {
     }
     body.position.y = Math.abs(Math.sin(Tf)) * 0.02 * m + Math.sin(TI * 2.2) * 0.008;
     neck.rotation.y = Math.sin(TI * 0.9) * 0.3 * (1 - m * 0.5);
+    jaw.rotation.x = 0.05 + Math.max(0, Math.sin(TI * 2.3)) * 0.16;
     for (let j = 0; j < tail.length; j++) {
       tail[j].rotation.y = Math.sin(TI * 2.4 + j) * 0.1 + Math.sin(Tf * 0.5 + j) * 0.12 * m;
     }
@@ -528,6 +682,7 @@ function buildSerpent(ctx) {
   const rBase = rng.range(0.15, 0.24);
   const spacing = rBase * 1.45;
   const spined = rng.chance(0.5);
+  const finned = !spined && rng.chance(0.6);
 
   const segs = [];
   for (let i = 0; i < n; i++) {
@@ -541,6 +696,15 @@ function buildSerpent(ctx) {
       addMesh(ctx, cone(ri * 0.28, ri * 1.1, 5), wrap, {
         pos: [0, ri * 0.85, 0], rot: [-0.5, 0, 0], paint: 'accent',
       });
+    } else if (finned && i > 1 && i < n - 1) {
+      addMesh(ctx, sphere(ri * 0.7, 7, 5), wrap, {
+        pos: [0, ri * 0.7, 0], scale: [0.14, 1.1, 0.9], paint: 'accent',
+      });
+    }
+    if (i > 1 && i % 3 === 0) {
+      for (const s of [-1, 1]) {
+        makeGlowMarks(ctx, wrap, { from: [s * ri * 0.9, 0, 0], to: [s * ri * 0.9, 0, 0], n: 1, r: ri * 0.16 });
+      }
     }
     segs.push({ wrap, baseY: wrap.position.y, i });
   }
@@ -548,12 +712,12 @@ function buildSerpent(ctx) {
   // head features on segment 0
   const headWrap = segs[0].wrap;
   const hr = rBase * 1.05;
-  const { neck } = makeHead(ctx, headWrap, {
+  const { neck, jaw } = makeHead(ctx, headWrap, {
     y: hr * 0.35, z: spacing * 0.55, r: hr,
-    variant: rng.pick(['horned', 'bulbous', 'beaked']), neckLen: 0,
+    variant: rng.pick(['horned', 'bulbous', 'beaked']), neckLen: 0, fanged: rng.chance(0.6),
   });
 
-  return (T, TI, m, dt) => {
+  return (T, TI, m) => {
     const TT = T * 0.55 + TI * 0.35;
     const sway = 0.28 + 0.72 * m;
     for (const s of segs) {
@@ -564,6 +728,7 @@ function buildSerpent(ctx) {
     }
     neck.rotation.y = Math.sin(TI * 0.6) * 0.3 * (1 - m * 0.4);
     neck.rotation.x = Math.sin(TI * 1.1) * 0.08;
+    jaw.rotation.x = 0.03 + Math.max(0, Math.sin(TI * 0.9)) * 0.1;
   };
 }
 
@@ -574,7 +739,7 @@ function buildFloater(ctx) {
   const nT = rng.int(3, 6);
   const bagY = tentLen + R * 0.85;
 
-  const bag = addMesh(ctx, sphere(R, 14, 11), body, { pos: [0, bagY, 0], scale: [1, 0.82, 1] });
+  const bag = addMesh(ctx, sphere(R, 16, 13), body, { pos: [0, bagY, 0], scale: [1, 0.82, 1] });
   addMesh(ctx, sphere(R * 0.5, 10, 7), body, { // crown
     pos: [0, bagY + R * 0.68, 0], scale: [1, 0.5, 1], paint: 'accent',
   });
@@ -582,6 +747,14 @@ function buildFloater(ctx) {
   addMesh(ctx, sphere(R * 0.92, 14, 7), body, {
     pos: [0, bagY - R * 0.42, 0], scale: [1, 0.35, 1], paint: 'accent',
   });
+  // bioluminescent ring of nodes around the bag equator
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * Math.PI * 2;
+    makeGlowMarks(ctx, body, {
+      from: [Math.cos(a) * R * 0.98, bagY - R * 0.1, Math.sin(a) * R * 0.98],
+      to: [Math.cos(a) * R * 0.98, bagY - R * 0.1, Math.sin(a) * R * 0.98], n: 1, r: R * 0.07,
+    });
+  }
 
   const tentacles = [];
   const jl = tentLen / 4;
@@ -634,16 +807,17 @@ function buildFloater(ctx) {
 
 function buildFlyer(ctx) {
   const { rng, body } = ctx;
-  const bodyR = rng.range(0.12, 0.19);
-  const bodyLen = rng.range(0.5, 0.75);
-  const span = rng.range(0.7, 1.15);
+  const bodyR = rng.range(0.12, 0.2);
+  const bodyLen = rng.range(0.5, 0.78);
+  const span = rng.range(0.7, 1.2);
   const restY = bodyR * 2.2;
 
   const tg = capsule(bodyR, bodyLen, 5, 10);
   tg.rotateX(Math.PI / 2);
+  taperZ(tg, (t) => 0.6 + 0.55 * Math.sin(Math.PI * t)); // spindle body
   addMesh(ctx, tg, body, { pos: [0, restY, 0], scale: [1, 1.05, 1] });
 
-  const chord = bodyLen * rng.range(0.55, 0.75);
+  const chord = bodyLen * rng.range(0.55, 0.78);
   const wingGeom = makeWingGeometry(rng, span, chord);
   const wings = [];
   for (const s of [-1, 1]) {
@@ -665,8 +839,8 @@ function buildFlyer(ctx) {
   });
   fanM.userData.span = bodyLen * 0.45;
 
-  const { neck } = makeHead(ctx, body, {
-    y: restY + bodyR * 0.35, z: bodyLen * 0.5, r: bodyR * rng.range(0.85, 1.1),
+  const { neck, jaw } = makeHead(ctx, body, {
+    y: restY + bodyR * 0.35, z: bodyLen * 0.5, r: bodyR * rng.range(0.85, 1.15),
     variant: rng.pick(['beaked', 'beaked', 'horned', 'bulbous']), neckLen: bodyR * 0.4,
   });
 
@@ -676,6 +850,10 @@ function buildFlyer(ctx) {
     g.translate(0, -restY * 0.35, 0);
     addMesh(ctx, g, body, { pos: [s * bodyR * 0.5, restY - bodyR * 0.4, -bodyLen * 0.1], rot: [0.25, 0, 0] });
   }
+  makeGlowMarks(ctx, body, {
+    from: [0, restY + bodyR * 0.6, bodyLen * 0.2], to: [0, restY + bodyR * 0.6, -bodyLen * 0.3],
+    n: 3, r: bodyR * 0.14,
+  });
 
   return (T, TI, m) => {
     const fold = 1 - m;
@@ -689,6 +867,7 @@ function buildFlyer(ctx) {
     fanM.rotation.z = Math.sin(TI * 0.9) * 0.15;
     neck.rotation.y = Math.sin(TI * 0.8) * 0.45 * fold;
     neck.rotation.x = -0.1 * m + Math.sin(TI * 1.2) * 0.06 * fold;
+    jaw.rotation.x = 0.03 + Math.max(0, Math.sin(TI * 1.6)) * 0.1 * fold;
   };
 }
 
@@ -737,24 +916,34 @@ export function buildCreature(seed, biome, opts = {}) {
   const back = hsl(baseHue, sat, light - 0.14);
   const accentHue = style.accent + rng.range(-0.03, 0.03);
   const accent = hsl(accentHue, Math.min(sat + 0.25, 0.8), 0.5);
+  const accent2 = hsl(accentHue + rng.range(0.08, 0.22), Math.min(sat + 0.15, 0.75), 0.4);
   const bone = hsl(baseHue, 0.12, 0.8);
   const dark = hsl(baseHue, sat * 0.6, 0.16);
   const glowEyes = bodyType === 'floater' || rng.chance(style.glow);
+  const biolum = bodyType === 'floater' || rng.chance(style.glow * 1.4 + 0.05);
 
   // ---- materials ------------------------------------------------------
   const skinMat = new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: 0.82, metalness: 0.02,
+    vertexColors: true, roughness: rng.range(0.74, 0.88), metalness: 0.02,
+  });
+  const shellMat = new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: rng.range(0.35, 0.55), metalness: rng.range(0.15, 0.4),
   });
   const wingMat = new THREE.MeshStandardMaterial({
     vertexColors: true, roughness: 0.7, metalness: 0.0, side: THREE.DoubleSide,
   });
   const eyeMat = new THREE.MeshStandardMaterial({ color: 0x0a0c10, roughness: 0.25 });
+  const pupilMat = new THREE.MeshStandardMaterial({ color: 0x05070a, roughness: 0.2, metalness: 0.1 });
   const glowColor = hsl(accentHue, 0.85, 0.6);
   const glowEyeMat = new THREE.MeshStandardMaterial({
     color: 0x000000, emissive: glowColor, emissiveIntensity: 2.4, roughness: 0.4,
   });
   const lureMat = new THREE.MeshStandardMaterial({
     color: 0x000000, emissive: glowColor, emissiveIntensity: 3.2, roughness: 0.4,
+  });
+  const markColor = hsl(accentHue + rng.range(-0.05, 0.05), 0.9, 0.6);
+  const markMat = new THREE.MeshStandardMaterial({
+    color: 0x000000, emissive: markColor, emissiveIntensity: rng.range(1.5, 2.4), roughness: 0.5,
   });
 
   // ---- assemble -------------------------------------------------------
@@ -763,15 +952,16 @@ export function buildCreature(seed, biome, opts = {}) {
   group.add(body);
 
   const ctx = {
-    rng, noise, root: group, body, geoms: [], skinMat, wingMat, eyeMat,
-    glowEyeMat, lureMat, glowEyes,
+    rng, noise, root: group, body, geoms: [], skinMat, shellMat, wingMat,
+    eyeMat, pupilMat, glowEyeMat, lureMat, markMat, glowEyes, biolum,
   };
   const animateBody = BUILDERS[bodyType](ctx);
 
   paintCreature(group, {
-    belly, back, accent, bone, dark, noise,
-    mode: rng.pick(['none', 'stripes', 'spots', 'stripes', 'spots']),
+    belly, back, accent, accent2, bone, dark, noise,
+    mode: rng.pick(['none', 'stripes', 'spots', 'rosettes', 'patches', 'stripes', 'spots']),
     patScale: bodyType === 'serpent' ? 2.6 : rng.range(1.8, 3.2),
+    countershade: rng.range(0.75, 1.5),
   });
 
   group.traverse((o) => {
@@ -817,8 +1007,9 @@ export function buildCreature(seed, biome, opts = {}) {
 
   function dispose() {
     for (const g of ctx.geoms) g.dispose();
-    skinMat.dispose(); wingMat.dispose(); eyeMat.dispose();
-    glowEyeMat.dispose(); lureMat.dispose();
+    skinMat.dispose(); shellMat.dispose(); wingMat.dispose();
+    eyeMat.dispose(); pupilMat.dispose();
+    glowEyeMat.dispose(); lureMat.dispose(); markMat.dispose();
     group.removeFromParent();
   }
 
