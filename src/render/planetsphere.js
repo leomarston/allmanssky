@@ -349,6 +349,7 @@ export class PlanetSphere {
     this._buildFaces();
     this._buildSea();
     this._buildAtmosphere();
+    this._buildClouds();
   }
 
   _buildFaces() {
@@ -652,8 +653,77 @@ export class PlanetSphere {
     this.root.add(this.atmoMesh);
   }
 
-  /** World-space unit vector pointing toward the sun (lights the atmo limb). */
-  setSunDirection(v) { this.atmoMat.uniforms.uSunDir.value.copy(v).normalize(); }
+  // A thin drifting cloud deck: coverage baked once from seamless 3D noise
+  // (sampled per-texel through the sphere direction, so no equirect seam), lit
+  // by the sun, with soft-thresholded gaps so continents show through. Sits
+  // above most terrain; the tallest peaks poke through. Zero assets.
+  _buildClouds() {
+    const W = 256, H = 128;
+    const img = new Uint8Array(W * H * 4);
+    const n = this.contNoise;
+    for (let y = 0; y < H; y++) {
+      const lat = (y / (H - 1) - 0.5) * Math.PI;
+      const cl = Math.cos(lat), sl = Math.sin(lat);
+      for (let x = 0; x < W; x++) {
+        const lon = (x / W) * Math.PI * 2;
+        const dx = cl * Math.cos(lon), dy = sl, dz = cl * Math.sin(lon);
+        const c = 0.5 + 0.5 * n.fbm3(dx * 2.4 + 13.1, dy * 2.4 + 7.7, dz * 2.4 + 21.3, 5);
+        const i = (y * W + x) * 4;
+        img[i] = 255; img[i + 1] = 255; img[i + 2] = 255;
+        img[i + 3] = Math.max(0, Math.min(255, c * 255));
+      }
+    }
+    const tex = new THREE.DataTexture(img, W, H, THREE.RGBAFormat);
+    tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    this._cloudTex = tex;
+
+    this.cloudMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTex: { value: tex },
+        uSunDir: { value: new THREE.Vector3(1, 0, 0) },
+        uOpacity: { value: 0.6 },
+      },
+      vertexShader: /* glsl */`
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+        varying vec3 vN; varying vec2 vUv;
+        void main() {
+          vN = normalize(mat3(modelMatrix) * normal);
+          vUv = uv;
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * viewMatrix * wp;
+          #include <logdepthbuf_vertex>
+        }`,
+      fragmentShader: /* glsl */`
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
+        uniform sampler2D uTex; uniform vec3 uSunDir; uniform float uOpacity;
+        varying vec3 vN; varying vec2 vUv;
+        void main() {
+          #include <logdepthbuf_fragment>
+          float cov = texture2D(uTex, vUv).a;
+          float cloud = smoothstep(0.50, 0.74, cov);
+          if (cloud < 0.01) discard;
+          float lit = clamp(dot(normalize(vN), uSunDir) * 0.6 + 0.55, 0.24, 1.12);
+          gl_FragColor = vec4(vec3(lit), cloud * uOpacity);
+        }`,
+      side: THREE.DoubleSide,
+      transparent: true,
+      depthWrite: false,
+    });
+    this.cloudMesh = new THREE.Mesh(new THREE.SphereGeometry(this.radius * 1.05, 96, 48), this.cloudMat);
+    this.cloudMesh.name = 'clouds';
+    this.cloudMesh.renderOrder = 3;
+    this.root.add(this.cloudMesh);
+  }
+
+  /** World-space unit vector pointing toward the sun (lights the atmo limb + clouds). */
+  setSunDirection(v) {
+    this.atmoMat.uniforms.uSunDir.value.copy(v).normalize();
+    if (this.cloudMat) this.cloudMat.uniforms.uSunDir.value.copy(v).normalize();
+  }
 
   /** Universe-space centre of the planet (default origin). */
   setPlanetCenter(v) { this.planetCenter.copy(v); }
@@ -683,6 +753,9 @@ export class PlanetSphere {
     const agl = rLen - this.radius;
     const g = 1 - agl / (this.radius * 0.5);
     this.atmoMat.uniforms.uGroundAmt.value = g < 0 ? 0 : g > 1 ? 1 : g;
+
+    // slow cloud drift (the mesh is a child of root, so it rebases correctly).
+    if (this.cloudMesh) this.cloudMesh.rotation.y += dt * 0.003;
   }
 
   /** { leaves, triangles, builds } — walks the tree; call sparingly. */
@@ -703,6 +776,7 @@ export class PlanetSphere {
     this._detailTex?.dispose();
     this.seaMesh.geometry.dispose(); this.seaMat.dispose();
     this.atmoMesh.geometry.dispose(); this.atmoMat.dispose();
+    this.cloudMesh.geometry.dispose(); this.cloudMat.dispose(); this._cloudTex.dispose();
     this.scene.remove(this.root);
   }
 }
