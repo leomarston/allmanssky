@@ -33,6 +33,7 @@ import { RefinerUI } from '../ui/refinerui.js';
 import { createCockpit } from '../render/cockpit.js';
 import { createArcforge } from '../render/arcforge.js';
 import { UnderwaterSystem } from '../render/underwater.js';
+import { createSkyEnvironment } from '../render/environment.js';
 import { audio } from '../audio/audio.js';
 
 const BOARD_RANGE = 6;
@@ -70,6 +71,17 @@ export class SurfaceState {
     this.sky = new SkyDome(this.scene, this.def);
     if (this.sky.light) this.scene.add(this.sky.light);
     if (this.sky.ambient) this.scene.add(this.sky.ambient);
+    // image-based lighting: real reflections + directional ambient for every PBR
+    // material (ships, hull, station, props, rocks) — the core "next-gen" cue
+    const atmo = this.def.atmosphere ?? {};
+    this.env = createSkyEnvironment(ctx.engine.renderer, {
+      zenith: atmo.skyColorHex ?? '#48719c',
+      horizon: atmo.fogColorHex ?? '#c0d2df',
+      ground: this.def.palette?.low ?? '#5a6a3a',
+      sunDir: this.sky.sunDir,
+      haze: atmo.density ?? 0.3,
+    });
+    this.env.apply(this.scene, 1.0);
     this.terrain = new TerrainRenderer(this.scene, this.def, this.field);
     this.flora = new FloraSystem(this.scene, this.def, this.field);
     this.creatures = new CreatureSystem(this.scene, this.def, this.field);
@@ -248,6 +260,9 @@ export class SurfaceState {
     this.timeOfDay = (this.timeOfDay + dt / this.def.dayLength) % 1;
     const sunElev = Math.sin(this.timeOfDay * Math.PI * 2);
     this.sky.update(dt, sunElev, this.camera.position);
+    // refresh IBL as the sun tracks (regenerates only on ~10° drift; sun fades at night)
+    const day = Math.max(0, Math.min(1, (sunElev + 0.1) / 0.3));
+    this.env?.update({ sunDir: this.sky.sunDir, sunIntensity: 0.15 + 3.0 * day });
     this.skyBodies.update(dt, this.camera.position, sunElev, this.timeOfDay);
     // thin the fog with altitude so the ground reads from the air
     if (this.scene.fog && this.mode !== 'foot') {
@@ -604,6 +619,8 @@ export class SurfaceState {
     this.terrain?.dispose?.();
     this.weather?.dispose?.();
     this.sky?.dispose?.();
+    this.env?.dispose?.();
+    this.scene.environment = null;
     this.flora?.dispose?.();
     this.creatures?.dispose?.();
     this.props?.dispose?.();
