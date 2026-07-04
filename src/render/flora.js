@@ -403,9 +403,11 @@ function buildArchetypes(def, kit, rng) {
 function grassProfile(biome, kit) {
   const leaf = mix(col(NATURE.leaf), kit.accent, 0.5);
   switch (biome) {
-    case 'lush': return { perCell: 165, cA: mix(leaf, kit.low, 0.3), cB: mix(col(NATURE.dry), kit.accent, 0.35), h: 1 };
-    case 'swamp': return { perCell: 120, cA: mix(kit.low, leaf, 0.5), cB: mix(kit.accent, col(NATURE.leafDark), 0.5), h: 1.15 };
-    case 'ocean': return { perCell: 95, cA: mix(leaf, kit.shore, 0.3), cB: mix(col(NATURE.dry), kit.accent, 0.5), h: 0.9 };
+    // grass follows the terrain greens (NATURE.leaf/low), NOT the planet accent —
+    // otherwise it inherits exotic accent hues (purple) and clashes with the ground
+    case 'lush': return { perCell: 95, cA: mix(col(NATURE.leaf), kit.low, 0.4), cB: mix(col(NATURE.leafDark), kit.low, 0.45), h: 0.7 };
+    case 'swamp': return { perCell: 85, cA: mix(kit.low, col(NATURE.leaf), 0.5), cB: mix(col(NATURE.leafDark), kit.low, 0.5), h: 0.9 };
+    case 'ocean': return { perCell: 72, cA: mix(col(NATURE.leaf), kit.low, 0.4), cB: mix(col(NATURE.dryDark), kit.low, 0.4), h: 0.78 };
     case 'desert': return { perCell: 14, cA: mix(col(NATURE.dryDark), kit.shore, 0.4), cB: col(NATURE.dry), h: 0.7 };
     case 'frozen': return { perCell: 12, cA: mix(col(NATURE.bone), kit.high, 0.5), cB: mix(col(NATURE.snow), kit.high, 0.4), h: 0.6 };
     case 'toxic': return { perCell: 28, cA: mix(kit.low, col(NATURE.sick), 0.4), cB: mix(kit.accent, col(NATURE.sick), 0.5), h: 0.9 };
@@ -477,8 +479,13 @@ function makeGrassMaterial(uniforms, tex) {
         'transformed.x += swy; transformed.z += swy * 0.6;',
         '#endif',
       ].join('\n'));
+    // green self-lift: thin vertical blades get little direct sun and soak the
+    // blue sky fill — push their own colour so they read as sunlit grass
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <emissivemap_fragment>',
+        '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.38;');
   };
-  mat.customProgramCacheKey = () => 'ams-flora-grass';
+  mat.customProgramCacheKey = () => 'ams-flora-grass-v2';
   return mat;
 }
 
@@ -487,8 +494,9 @@ function makeGrassGeometry(h) {
   for (let i = 0; i < 2; i++) {
     const p = new THREE.PlaneGeometry(1.15, h, 1, 1);
     xf(p, 0, h / 2, 0, 0, i * Math.PI / 2, 0);
-    // grayscale gradient (dark base) — per-instance color supplies the hue
-    paint(p, col(0x5c5c5c), col(0xffffff));
+    // grayscale gradient — brighter base so blades read as lit grass, not dark
+    // spikes (thin vertical quads otherwise get almost no direct sun)
+    paint(p, col(0x8f8f8f), col(0xffffff));
     parts.push(p);
   }
   return merge(parts);
