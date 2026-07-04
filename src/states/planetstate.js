@@ -33,6 +33,11 @@ import { buildShip } from '../render/shipmesh.js';
 import { PlanetSphere } from '../render/planetsphere.js';
 import { PlanetScatter } from '../render/planetscatter.js';
 import { PlanetFauna } from '../render/planetfauna.js';
+import { PlanetResources } from '../render/planetresources.js';
+import { EffectsSystem } from '../render/effects.js';
+import { itemColor, ITEMS } from '../gameplay/items.js';
+import { events } from '../core/events.js';
+import { audio } from '../audio/audio.js';
 
 // --- feel constants (borrowed from the flat controllers where sensible) ------
 const EYE_HEIGHT = 1.7;             // player.js
@@ -97,6 +102,13 @@ export class PlanetState {
     this._m = new THREE.Matrix4();
     this._lookPt = new THREE.Vector3();
     this._sUp = new THREE.Vector3();      // radial up handed to PlanetScatter
+
+    // --- harvest mining scratch/state ----------------------------------------
+    this._mineBeam = null;
+    this._mineTick = 0;
+    this._aim = new THREE.Vector3();       // camera aim direction (world)
+    this._mineFrom = new THREE.Vector3();  // beam emitter tip
+    this._mineTo = new THREE.Vector3();    // beam endpoint (node middle)
   }
 
   async enter(params = {}) {
@@ -134,6 +146,13 @@ export class PlanetState {
     // wandering creatures glued to the round surface in the same floating-origin
     // frame — they stream in / recycle as you walk and make the world feel alive.
     this.fauna = new PlanetFauna(this.scene, this.planet, { seed });
+
+    // pooled VFX (mining beam + sparks) and the harvestable resource layer —
+    // both glued to the round surface in the same floating-origin frame.
+    this.effects = new EffectsSystem(this.scene);
+    this.resources = new PlanetResources(this.scene, this.planet, {
+      seed, sunDir: SUN_DIR, density: 1,
+    });
 
     // ship visual (camera-relative; stays near origin for precision)
     const gs = ctx.gameState;
@@ -260,6 +279,8 @@ export class PlanetState {
     this._sUp.copy(this.playerUniPos).normalize();
     this.scatter?.update(dt, this.playerUniPos, this._sUp);
     this.fauna?.update(dt, this.playerUniPos, this._sUp);
+    this.resources?.update(dt, this.playerUniPos, this._sUp);
+    this.effects?.update(dt);
 
     this._hud(dt);
   }
@@ -433,8 +454,52 @@ export class PlanetState {
     this.camera.up.copy(this._up);
     this.camera.lookAt(this._lookPt);
 
-    // take-off prompt
+    // take-off prompt (default; the mining block below may override the label
+    // while aimed at a node, but take-off via G must still work every frame).
     this._interactLabel = 'G — TAKE OFF';
+
+    // --- harvest mining -------------------------------------------------------
+    // aim = the camera look direction (camera sits at the origin, so _lookPt is
+    // already the world-space aim). Query the resource layer along it.
+    const gs = this.ctx.gameState;
+    this._aim.copy(this._lookPt).normalize();
+    const node = this.resources?.pickAlongAim(this.playerUniPos, this._aim, 26, 0.965);
+    if (node) {
+      this._interactLabel = 'HOLD LMB — MINE ' + (ITEMS[node.itemId]?.name ?? 'DEPOSIT').toUpperCase();
+    }
+
+    const firing = !!gs && !this._uiOpen() && input.mouseDown[0] && input.aiming && !!node;
+    if (firing) {
+      const colHex = itemColor(node.itemId);
+      const to = this.resources.nodeEndPos(node, this.playerUniPos, this._mineTo);
+      // beam emitter tip: just ahead of the eye, nudged down toward the hip.
+      this._mineFrom.copy(this._aim).multiplyScalar(1.2).addScaledVector(this._up, -0.25);
+      if (!this._mineBeam) {
+        this._mineBeam = this.effects.miningBeam(this._mineFrom, to, colHex);
+        audio.sfx('mine');
+      } else {
+        this._mineBeam.set(this._mineFrom, to);
+      }
+      this._mineTick += dt;
+      if (this._mineTick >= 0.55) {
+        this._mineTick = 0;
+        this.effects.sparks(to, this._up, colHex);
+        audio.sfx('mineHit');
+        const qty = 1 + Math.floor(Math.random() * 2);
+        const added = gs.addItem(node.itemId, qty);
+        if (added > 0) {
+          events.emit('notify', { text: `+${added} ${ITEMS[node.itemId].name}`, tone: 'good' });
+          events.emit('resource:mined', { id: node.itemId, amount: added });
+        }
+        const res = this.resources.harvest(node, 1);
+        if (res.depleted) audio.sfx('collect');
+      }
+    } else if (this._mineBeam) {
+      this._mineBeam.off();
+      this._mineBeam = null;
+      this._mineTick = 0;
+    }
+
     if (enabled && input.actionPressed('land')) this.takeOff();
   }
 
@@ -500,6 +565,9 @@ export class PlanetState {
   exit() {
     this._hintEl?.remove();
     this.ctx.hud?.setMode('hidden');
+    this._mineBeam?.off?.();
+    this.resources?.dispose();
+    this.effects?.dispose?.();
     this.fauna?.dispose();
     this.scatter?.dispose();
     this.planet?.dispose();
