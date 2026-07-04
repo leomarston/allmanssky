@@ -170,27 +170,15 @@ function buildArchetypes(def, kit, rng) {
     const h = r.range(3.0, 4.4) * hMul;
     const t = trunk(r, h, r.range(0.26, 0.36), r.range(0.05, 0.22), trkC, trkD);
     const parts = [t.geo];
-    // a couple of short branches near the canopy base (kept minimal so a close
-    // grove doesn't read as a thicket of bare dark spikes)
-    const nBr = r.int(2, 3);
-    for (let i = 0; i < nBr; i++) {
-      const a = (i / nBr) * Math.PI * 2 + r.range(-0.4, 0.4);
-      const bl = r.range(0.6, 1.0) * hMul;
-      const g = cone(r.range(0.05, 0.09), bl, 4);
-      xf(g, 0, bl / 2, 0);
-      xf(g, 0, 0, 0, r.range(0.8, 1.2), 0, 0);
-      xf(g, t.tipX * 0.5, h * r.range(0.62, 0.78), t.tipZ * 0.5, 0, a, 0);
-      parts.push(paint(g, trkD, trkC));
-    }
-    // fuller canopy spread DOWN the upper trunk so trees aren't bare-trunked when
-    // seen up close — foliage from ~55% height to the crown
-    const nBlob = r.int(6, 9);
+    // SOLID rounded crown: a tight cluster of big overlapping leaf-masses at the
+    // top that fully envelop the trunk tip — no branches/gaps that read as spikes
+    const nBlob = r.int(4, 6);
+    const cr = r.range(1.5, 2.2) * hMul;              // crown cluster radius
     for (let i = 0; i < nBlob; i++) {
-      const br = r.range(0.9, 1.6) * hMul;
-      const b = blob(r, br, r.range(0.66, 0.86), cB, cA);
-      const a = r.range(0, Math.PI * 2), rad = r.range(0, 1.2) * hMul;
-      const by = h * r.range(0.55, 1.0) + r.range(-0.2, 0.4);
-      xf(b, t.tipX * (by / h) + Math.cos(a) * rad, by, t.tipZ * (by / h) + Math.sin(a) * rad);
+      const br = cr * r.range(0.72, 1.0);
+      const b = blob(r, br, r.range(0.72, 0.96), cB, cA);
+      const a = r.range(0, Math.PI * 2), rad = r.range(0, 0.6) * cr;
+      xf(b, t.tipX + Math.cos(a) * rad, h + r.range(-0.35, 0.5), t.tipZ + Math.sin(a) * rad);
       parts.push(b);
     }
     return merge(parts);

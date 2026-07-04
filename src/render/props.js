@@ -363,31 +363,33 @@ export function createResourceNode(itemId, rng, colorHex) {
   const rocky = itemId === 'ferrox' || itemId === 'silica';
 
   const rockMat = stoneMat(new THREE.Color(0x554e44).lerp(c, 0.16));
+  // brighter body + stronger emissive so crystals read as glowing gems that feed
+  // bloom, not dark spikes
   const crysMat = new THREE.MeshStandardMaterial({
-    color: c.clone().multiplyScalar(0.28), emissive: c,
-    emissiveIntensity: rocky ? 0.9 : rng.range(1.25, 1.7),
-    roughness: 0.32, metalness: 0.1, flatShading: true,
+    color: c.clone().multiplyScalar(0.5), emissive: c,
+    emissiveIntensity: rocky ? 1.2 : rng.range(1.8, 2.4),
+    roughness: 0.28, metalness: 0.1, flatShading: true,
   });
 
-  // base rocks
-  const nRock = rocky ? 3 : 2;
+  // base rocks — a bit larger so the node reads as a crystal-studded outcrop
+  const nRock = rocky ? 3 : 3;
   for (let i = 0; i < nRock; i++) {
-    const r = rng.range(0.55, 1.0) * (rocky ? 1.2 : 1);
+    const r = rng.range(0.6, 1.05) * (rocky ? 1.2 : 1);
     put(group, jitterGeo(new THREE.IcosahedronGeometry(r, 1), rng, r * 0.22), rockMat,
-      rng.range(-0.8, 0.8), r * 0.35, rng.range(-0.8, 0.8), 0, rng.range(0, 3), 0);
+      rng.range(-0.7, 0.7), r * 0.35, rng.range(-0.7, 0.7), 0, rng.range(0, 3), 0);
   }
 
-  // crystal shards fanning out of the rock
+  // crystal shards — shorter + fatter (gem clusters, not spikes), tilted modestly
   const nCry = rocky ? rng.int(3, 5) : rng.int(5, 8);
   for (let i = 0; i < nCry; i++) {
-    const len = rng.range(0.7, rocky ? 1.3 : 2.2);
-    const geo = new THREE.OctahedronGeometry(rng.range(0.16, 0.3), 0);
-    geo.scale(1, len / 0.3, 1);
+    const len = rng.range(0.45, rocky ? 0.8 : 1.25);
+    const geo = new THREE.OctahedronGeometry(rng.range(0.2, 0.42), 0);
+    geo.scale(1, len / 0.42, 1);
     const a = rng.range(0, Math.PI * 2);
-    const rr = rng.range(0.1, 0.9);
+    const rr = rng.range(0.1, 0.8);
     const sh = put(group, geo, crysMat,
-      Math.cos(a) * rr, len * 0.42, Math.sin(a) * rr,
-      Math.cos(a) * rng.range(0.1, 0.5), rng.range(0, 3), -Math.sin(a) * rng.range(0.1, 0.5));
+      Math.cos(a) * rr, len * 0.4 + 0.2, Math.sin(a) * rr,
+      Math.cos(a) * rng.range(0.05, 0.32), rng.range(0, 3), -Math.sin(a) * rng.range(0.05, 0.32));
     sh.castShadow = false;
   }
   return result(group, 5, 'node');
