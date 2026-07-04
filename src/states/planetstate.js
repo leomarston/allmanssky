@@ -104,9 +104,10 @@ export class PlanetState {
     this._lookPt = new THREE.Vector3();
     this._sUp = new THREE.Vector3();      // radial up handed to PlanetScatter
 
-    // --- harvest mining scratch/state ----------------------------------------
+    // --- harvest mining + scan scratch/state ---------------------------------
     this._mineBeam = null;
     this._mineTick = 0;
+    this._scanCd = 0;                       // scanner cooldown (s)
     this._aim = new THREE.Vector3();       // camera aim direction (world)
     this._mineFrom = new THREE.Vector3();  // beam emitter tip
     this._mineTo = new THREE.Vector3();    // beam endpoint (node middle)
@@ -543,7 +544,52 @@ export class PlanetState {
       this._mineTick = 0;
     }
 
+    // --- scan / discovery (advances the "scan N lifeforms" quests) -----------
+    this._scanCd = Math.max(0, this._scanCd - dt);
+    if (enabled && !this._uiOpen() && this._scanCd <= 0 && input.actionPressed('scan')) {
+      this._scan(gs);
+    }
+
     if (enabled && input.actionPressed('land')) this.takeOff();
+  }
+
+  /** Analyse pulse: bank Lumens + register discoveries (creatures/flora/mineral)
+   *  through gs.discover, which emits discovery:new and drives the scan quests. */
+  _scan(gs) {
+    this._scanCd = 6;
+    audio.sfx('scan');
+    events.emit('scanner:pulse');
+    if (!gs) return;
+    let found = 0;
+    // nearest creature within range -> a lifeform discovery.
+    if (this.fauna?.creatures?.length) {
+      let best = null, bestD = 60 * 60;
+      for (const c of this.fauna.creatures) {
+        const d = c.uniPos.distanceToSquared(this.playerUniPos);
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      if (best) {
+        const name = best.profile?.name ?? 'Lifeform';
+        if (gs.discover('creatures', `${this.biome.key}:${best.cellKey}`, name, 90)) {
+          gs.stats.creaturesScanned = (gs.stats.creaturesScanned ?? 0) + 1;
+          found++;
+          events.emit('notify', { text: `NEW LIFEFORM · ${name} (+90)`, tone: 'good' });
+        }
+      }
+    }
+    // catalogue the biome's flora family once per world.
+    if (gs.discover('flora', `${this.biome.key}:flora`, `${this.biome.name} flora`, 45)) found++;
+    // nearest mineral node -> a mineral discovery.
+    const nodes = this.resources?.nodes;
+    if (nodes && nodes.length) {
+      let best = null, bestD = 45 * 45;
+      for (const n of nodes) {
+        const d = this._tmp.copy(n.dir).multiplyScalar(n.r).distanceToSquared(this.playerUniPos);
+        if (d < bestD) { bestD = d; best = n; }
+      }
+      if (best && gs.discover('minerals', best.itemId, ITEMS[best.itemId]?.name ?? best.itemId, 20)) found++;
+    }
+    if (found === 0) events.emit('notify', { text: 'SCAN · nothing new nearby', tone: 'info' });
   }
 
   _hud(dt) {
@@ -600,7 +646,8 @@ export class PlanetState {
       'text-align:center',
     ].join(';');
     el.innerHTML = 'SEAMLESS PLANET · W throttle · mouse steer · Q/E roll · '
-      + '<b>F</b> disembark near ground · <b>G</b> take off · Space jump';
+      + '<b>F</b> disembark near ground · <b>G</b> take off · Space jump · '
+      + '<b>LMB</b> mine · <b>V</b> scan';
     document.getElementById('ui-root').appendChild(el);
     this._hintEl = el;
   }
