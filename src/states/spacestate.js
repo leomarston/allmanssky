@@ -14,6 +14,7 @@ import { ShipController } from '../gameplay/shipcontrol.js';
 import { SpaceCombat } from '../gameplay/combat.js';
 import { SpaceMining } from '../gameplay/mining.js';
 import { SpaceLife } from '../gameplay/spacelife.js';
+import { CapitalFleet } from '../render/capitalfleet.js';
 import { AsteroidField } from '../render/asteroidfield.js';
 import { ITEMS, itemColor } from '../gameplay/items.js';
 import { createCockpit } from '../render/cockpit.js';
@@ -98,6 +99,8 @@ export class SpaceState {
     this.combat = new SpaceCombat(this.scene, this.effects, gs, this.system, this.shipCtl);
     this.mining = new SpaceMining(this.scene, this.effects, gs, this);
     this.life = new SpaceLife(this.scene, this.system, gs, this);
+    // hero capital freighter + escort wing (deterministic per system)
+    this.capital = new CapitalFleet(this.scene, this.system, this);
     // local fly-through minable asteroid field around the ship (NMS-style)
     this.field = new AsteroidField(this.scene, this.system, { center: this.shipCtl.position });
     this._fieldFireCd = 0;
@@ -213,6 +216,7 @@ export class SpaceState {
     if (!this._warping) this._interactions(dt);
     // after _interactions so anomaly prompts can claim the interact label
     this.life.update(dt, this.shipCtl.position);
+    this.capital.update(dt, this.shipCtl.position);
 
     // cockpit vs chase view
     if (input.actionPressed('scan') && !ctx.ui.anyOpen?.()) {
@@ -473,6 +477,7 @@ export class SpaceState {
     this.combat?.dispose?.();
     this.field?.dispose?.();
     this.life?.dispose?.();
+    this.capital?.dispose?.();
     for (const p of this.planets) p.visual.dispose?.();
     this.starfield?.object3d && this.scene.remove(this.starfield.object3d);
     this.scene = null;
