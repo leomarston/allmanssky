@@ -31,6 +31,7 @@ import * as THREE from 'three';
 import { input } from '../core/input.js';
 import { buildShip } from '../render/shipmesh.js';
 import { PlanetSphere } from '../render/planetsphere.js';
+import { PlanetScatter } from '../render/planetscatter.js';
 
 // --- feel constants (borrowed from the flat controllers where sensible) ------
 const EYE_HEIGHT = 1.7;             // player.js
@@ -94,6 +95,7 @@ export class PlanetState {
     this._e = new THREE.Euler();
     this._m = new THREE.Matrix4();
     this._lookPt = new THREE.Vector3();
+    this._sUp = new THREE.Vector3();      // radial up handed to PlanetScatter
   }
 
   async enter(params = {}) {
@@ -121,6 +123,12 @@ export class PlanetState {
     });
     this.planet.setSunDirection(SUN_DIR);
     this.planet.setPlanetCenter(new THREE.Vector3(0, 0, 0));
+
+    // streamed ground cover (grass/plants/rocks) glued to the round surface in
+    // the same floating-origin frame as the planet — makes walking feel alive.
+    this.scatter = new PlanetScatter(this.scene, this.planet, {
+      seed, sunDir: SUN_DIR, density: 1,
+    });
 
     // ship visual (camera-relative; stays near origin for precision)
     const gs = ctx.gameState;
@@ -241,6 +249,11 @@ export class PlanetState {
 
     if (this.mode === 'ship') this._updateShip(dt);
     else this._updateFoot(dt);
+
+    // ground cover follows the (now-updated) player position in both modes, so
+    // it streams in as you fly low and stays glued while you walk.
+    this._sUp.copy(this.playerUniPos).normalize();
+    this.scatter?.update(dt, this.playerUniPos, this._sUp);
 
     this._hud(dt);
   }
@@ -481,6 +494,7 @@ export class PlanetState {
   exit() {
     this._hintEl?.remove();
     this.ctx.hud?.setMode('hidden');
+    this.scatter?.dispose();
     this.planet?.dispose();
     this.shipObj?.dispose?.();
     if (this.stars) { this.stars.geometry.dispose(); this.stars.material.dispose(); }

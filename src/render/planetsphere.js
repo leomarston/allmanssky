@@ -199,6 +199,13 @@ export class PlanetSphere {
     this.contAmp = this.radius * 0.018;  // rolling continents
     this.mtnAmp = this.radius * 0.045;   // ridged mountain ranges
     this.detAmp = this.radius * 0.005;   // fine surface detail
+    // Near-surface relief: two higher-frequency, low-amplitude octaves so the
+    // ground reads as rolling undulation up close (metres-to-tens-of-metres),
+    // not a flat ball. Kept gentle so slopes stay walkable and — because both
+    // the mesh build AND heightAt() flow through _elevation — collision stays
+    // consistent. These only resolve visually once chunks reach deep LOD.
+    this.fine1Amp = this.radius * 0.00052;  // ~2.1 m over ~72 m wavelength
+    this.fine2Amp = this.radius * 0.00026;  // ~1.0 m over ~33 m wavelength
     this._floor = this.radius * 0.965;   // ocean-basin floor clamp
 
     // Skirt depth as a fraction of a chunk's world size — hangs a vertical
@@ -248,7 +255,12 @@ export class PlanetSphere {
     const ridge = ridged3(this.mtnNoise, nx * 2.7 + 1.2, ny * 2.7 + 4.5, nz * 2.7 + 9.9, 5);
     const mont = ridge * land * (0.35 + 0.65 * smoothstep(0.0, 0.45, cont));
     const det = this.detNoise.fbm3(nx * 9.0 + 2.0, ny * 9.0 + 5.0, nz * 9.0 + 1.0, 3);
-    return cont * this.contAmp + mont * this.mtnAmp + det * this.detAmp * land;
+    // fine near-surface undulation (single high-frequency octaves; reuse the
+    // detail field at different offsets/frequencies — no extra noise object).
+    const f1 = this.detNoise.noise3D(nx * 55.0 + 21.3, ny * 55.0 + 8.7, nz * 55.0 + 33.1);
+    const f2 = this.detNoise.noise3D(nx * 120.0 + 4.2, ny * 120.0 + 51.5, nz * 120.0 + 17.9);
+    const fine = (f1 * this.fine1Amp + f2 * this.fine2Amp) * land;
+    return cont * this.contAmp + mont * this.mtnAmp + det * this.detAmp * land + fine;
   }
 
   // Terrain radius (planet-local) along a unit direction, floor-clamped.
