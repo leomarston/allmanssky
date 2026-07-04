@@ -32,6 +32,7 @@ import { input } from '../core/input.js';
 import { buildShip } from '../render/shipmesh.js';
 import { PlanetSphere } from '../render/planetsphere.js';
 import { PlanetScatter } from '../render/planetscatter.js';
+import { PlanetFauna } from '../render/planetfauna.js';
 
 // --- feel constants (borrowed from the flat controllers where sensible) ------
 const EYE_HEIGHT = 1.7;             // player.js
@@ -129,6 +130,10 @@ export class PlanetState {
     this.scatter = new PlanetScatter(this.scene, this.planet, {
       seed, sunDir: SUN_DIR, density: 1,
     });
+
+    // wandering creatures glued to the round surface in the same floating-origin
+    // frame — they stream in / recycle as you walk and make the world feel alive.
+    this.fauna = new PlanetFauna(this.scene, this.planet, { seed });
 
     // ship visual (camera-relative; stays near origin for precision)
     const gs = ctx.gameState;
@@ -254,6 +259,7 @@ export class PlanetState {
     // it streams in as you fly low and stays glued while you walk.
     this._sUp.copy(this.playerUniPos).normalize();
     this.scatter?.update(dt, this.playerUniPos, this._sUp);
+    this.fauna?.update(dt, this.playerUniPos, this._sUp);
 
     this._hud(dt);
   }
@@ -494,6 +500,7 @@ export class PlanetState {
   exit() {
     this._hintEl?.remove();
     this.ctx.hud?.setMode('hidden');
+    this.fauna?.dispose();
     this.scatter?.dispose();
     this.planet?.dispose();
     this.shipObj?.dispose?.();
