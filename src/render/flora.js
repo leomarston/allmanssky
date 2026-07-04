@@ -158,8 +158,8 @@ function buildArchetypes(def, kit, rng) {
   const biome = def?.biome ?? 'barren';
   const leaf = mix(col(NATURE.leaf), kit.accent, 0.5);
   const leafD = mix(col(NATURE.leafDark), kit.low, 0.45);
-  const trkC = mix(col(NATURE.trunk), kit.cliff, 0.3);
-  const trkD = mix(col(NATURE.trunkDark), kit.cliff, 0.3);
+  const trkC = mix(col(0x836043), kit.shore, 0.28);   // warmer, lighter bark
+  const trkD = mix(col(0x5c4229), kit.cliff, 0.25);
   const A = [];
   const add = (name, geo, o = {}) => A.push({
     name, geo, weight: o.weight ?? 1, sMin: o.sMin ?? 0.8, sMax: o.sMax ?? 1.3,
@@ -167,28 +167,30 @@ function buildArchetypes(def, kit, rng) {
   });
 
   const canopyTree = (r, hMul, cA, cB) => { // r = forked RNG
-    const h = r.range(3.6, 5.6) * hMul;
-    const t = trunk(r, h, r.range(0.24, 0.34), r.range(0.05, 0.22), trkC, trkD);
+    const h = r.range(3.0, 4.4) * hMul;
+    const t = trunk(r, h, r.range(0.26, 0.36), r.range(0.05, 0.22), trkC, trkD);
     const parts = [t.geo];
-    // branches angling up from the upper trunk toward the canopy — breaks the
-    // "lollipop" silhouette that reads as low-poly
-    const nBr = r.int(3, 5);
+    // a couple of short branches near the canopy base (kept minimal so a close
+    // grove doesn't read as a thicket of bare dark spikes)
+    const nBr = r.int(2, 3);
     for (let i = 0; i < nBr; i++) {
       const a = (i / nBr) * Math.PI * 2 + r.range(-0.4, 0.4);
-      const bl = r.range(0.8, 1.5) * hMul;
-      const g = cone(r.range(0.04, 0.08), bl, 4);
+      const bl = r.range(0.6, 1.0) * hMul;
+      const g = cone(r.range(0.05, 0.09), bl, 4);
       xf(g, 0, bl / 2, 0);
-      xf(g, 0, 0, 0, r.range(0.7, 1.15), 0, 0);              // tilt outward
-      xf(g, t.tipX * 0.5, h * r.range(0.55, 0.8), t.tipZ * 0.5, 0, a, 0);
+      xf(g, 0, 0, 0, r.range(0.8, 1.2), 0, 0);
+      xf(g, t.tipX * 0.5, h * r.range(0.62, 0.78), t.tipZ * 0.5, 0, a, 0);
       parts.push(paint(g, trkD, trkC));
     }
-    // fuller canopy: many smaller, layered leaf clusters instead of 2-3 lumps
-    const nBlob = r.int(5, 8);
+    // fuller canopy spread DOWN the upper trunk so trees aren't bare-trunked when
+    // seen up close — foliage from ~55% height to the crown
+    const nBlob = r.int(6, 9);
     for (let i = 0; i < nBlob; i++) {
-      const br = r.range(0.8, 1.5) * hMul;
+      const br = r.range(0.9, 1.6) * hMul;
       const b = blob(r, br, r.range(0.66, 0.86), cB, cA);
-      const a = r.range(0, Math.PI * 2), rad = r.range(0, 1.1) * hMul;
-      xf(b, t.tipX + Math.cos(a) * rad, h - br * 0.15 + r.range(-0.6, 0.9), t.tipZ + Math.sin(a) * rad);
+      const a = r.range(0, Math.PI * 2), rad = r.range(0, 1.2) * hMul;
+      const by = h * r.range(0.55, 1.0) + r.range(-0.2, 0.4);
+      xf(b, t.tipX * (by / h) + Math.cos(a) * rad, by, t.tipZ * (by / h) + Math.sin(a) * rad);
       parts.push(b);
     }
     return merge(parts);
@@ -207,7 +209,7 @@ function buildArchetypes(def, kit, rng) {
   switch (biome) {
     case 'lush': {
       add('canopyA', canopyTree(rng.fork('cA'), 1.0, leaf, leafD), { weight: 3, sMin: 0.9, sMax: 1.6 });
-      add('canopyB', canopyTree(rng.fork('cB'), 1.28, mix(leaf, kit.accent, 0.4), leafD), { weight: 2, sMin: 0.9, sMax: 1.5 });
+      add('canopyB', canopyTree(rng.fork('cB'), 1.12, mix(leaf, kit.accent, 0.4), leafD), { weight: 2, sMin: 0.9, sMax: 1.4 });
       const fr = rng.fork('fern');
       // low, spread, bright fronds — a ground fern, not a black spike cluster
       add('fern', merge(fronds(fr, fr.int(8, 11), 0.9, 0.4, 0.5, 0.08, mix(leaf, kit.low, 0.25), mix(leaf, kit.accent, 0.7), 0.2)),
