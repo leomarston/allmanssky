@@ -64,6 +64,43 @@ const PLANT_HI = col(0x86933f);
 const ROCK_LOW = col(0x7c6e58);    // matches PlanetSphere rock band
 const ROCK_HI = col(0xa9a394);     // paler / snow-dusted near the caps
 
+// Per-biome cover density multipliers (keyed on biome.key). Scales how much
+// grass/plant cover streams in; rocks use a floored variant (see _rockMul) so
+// bare stones stay common on ANY terrain. Absent/unknown biome -> lush (1.0).
+const COVER_DENSITY = {
+  lush: 1.0, ocean: 0.85, toxic: 0.95, exotic: 0.8,
+  frozen: 0.45, desert: 0.32, scorched: 0.14, barren: 0.06,
+};
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+// Derive cover base colours from a biome descriptor's palette so tufts/plants/
+// rocks read in the world's earth tones instead of a hardcoded green. Drier
+// biomes (moistureBias < 0) lean their "grass" toward arid scrub -> soil; on
+// dead worlds this becomes grey rubble / dry lichen rather than green.
+function coverColorsFor(biome) {
+  const P = biome.palette;
+  const dry = clamp01(0.5 - 0.5 * (biome.moistureBias ?? 0));
+  return {
+    grassLow: col(P.grassLush).lerp(col(P.grassArid), dry),
+    grassHi: col(P.grassArid).lerp(col(P.soil), 0.30 + dry * 0.40),
+    plantLow: col(P.grassLush).lerp(col(P.grassArid), 0.45 + dry * 0.40),
+    plantHi: col(P.grassArid).lerp(col(P.soil), 0.50),
+    rockLow: col(P.rock),
+    rockHi: col(P.cliff).lerp(col(P.snow), 0.20),
+  };
+}
+
+// Lush-like fallback (byte-identical to the pre-biome constants) so callers that
+// omit opts.biome keep the original look.
+function lushFallbackColors() {
+  return {
+    grassLow: GRASS_LOW.clone(), grassHi: GRASS_HI.clone(),
+    plantLow: PLANT_LOW.clone(), plantHi: PLANT_HI.clone(),
+    rockLow: ROCK_LOW.clone(), rockHi: ROCK_HI.clone(),
+  };
+}
+
 // --- geometry helpers -------------------------------------------------------
 
 /** Bake a bottom->top grayscale/color gradient into a geometry (Y in object space). */
@@ -147,8 +184,10 @@ function buildTuft(rng) {
   return geo;
 }
 
-/** A small leafy shrub: a squashed, jittered icosahedron. Base at y=0. */
-function buildPlant(rng) {
+/** A small leafy shrub: a squashed, jittered icosahedron. Base at y=0. The
+ *  baked bottom->top gradient uses the biome's low-plant colours (cLow/cHigh) so
+ *  the per-instance biome tint multiplies a matching hue, not a fixed green. */
+function buildPlant(rng, cLow, cHigh) {
   const g = new THREE.IcosahedronGeometry(0.5, 1);
   g.scale(1.0, 1.5, 1.0);
   const p = g.attributes.position;
@@ -160,11 +199,12 @@ function buildPlant(rng) {
   }
   g.computeVertexNormals();
   baseToFloor(g);
-  return paintGradient(g, PLANT_LOW, PLANT_HI);
+  return paintGradient(g, cLow, cHigh);
 }
 
-/** A low boulder: a flattened, jittered icosahedron. Base at y=0. */
-function buildRock(rng) {
+/** A low boulder: a flattened, jittered icosahedron. Base at y=0. Baked gradient
+ *  uses the biome's rock/cliff colours (cLow/cHigh) for the same reason. */
+function buildRock(rng, cLow, cHigh) {
   const g = new THREE.IcosahedronGeometry(0.5, 0);
   g.scale(1.25, 0.72, 1.15);
   const p = g.attributes.position;
@@ -176,7 +216,7 @@ function buildRock(rng) {
   }
   g.computeVertexNormals();
   baseToFloor(g);
-  return paintGradient(g, ROCK_LOW, ROCK_HI);
+  return paintGradient(g, cLow, cHigh);
 }
 
 // --- material ---------------------------------------------------------------
@@ -267,6 +307,7 @@ export class PlanetScatter {
    * @param {number} [opts.seed]           deterministic placement seed
    * @param {THREE.Vector3} [opts.sunDir]  world-space unit vector toward the sun
    * @param {number} [opts.density=1]      0..1 scales cover counts
+   * @param {object} [opts.biome]          biome descriptor (palette/moistureBias/key)
    * @param {number} [opts.windStrength]   object-space bend amount
    */
   constructor(scene, planet, opts = {}) {
@@ -275,6 +316,16 @@ export class PlanetScatter {
     this.radius = planet.radius;
     this.seaLevel = planet.seaLevel;
     this.density = Math.max(0, Math.min(1, opts.density ?? 1));
+
+    // biome-aware cover: base colours from the biome palette (lush-like fallback
+    // when absent) and per-biome density multipliers. Rocks keep a 0.5 floor so
+    // bare stones stay common even on near-dead worlds.
+    const biome = (opts.biome && opts.biome.palette) ? opts.biome : null;
+    this._cover = biome ? coverColorsFor(biome) : lushFallbackColors();
+    const bkey = (biome && biome.key) || 'lush';
+    this._coverMul = COVER_DENSITY[bkey] ?? 1;
+    this._rockMul = Math.max(0.5, this._coverMul);
+
     this.cellUV = CELL_M / this.radius;
     this.seed = (opts.seed ?? 0x5ca77e5) >>> 0;
     this.time = 0;
@@ -305,8 +356,8 @@ export class PlanetScatter {
 
     const grng = new RNG(hash32(this.seed, hashString('scatter-geo')));
     this.grassGeo = buildTuft(grng.fork('tuft'));
-    this.plantGeo = buildPlant(grng.fork('plant'));
-    this.rockGeo = buildRock(grng.fork('rock'));
+    this.plantGeo = buildPlant(grng.fork('plant'), this._cover.plantLow, this._cover.plantHi);
+    this.rockGeo = buildRock(grng.fork('rock'), this._cover.rockLow, this._cover.rockHi);
 
     this.grassMat = makeCoverMat(this.uniforms, { key: 'grass', wind: 1.0, lift: 0.62, skyFill: 0.10, side: THREE.DoubleSide, roughness: 0.92 });
     this.plantMat = makeCoverMat(this.uniforms, { key: 'plant', wind: 0.45, lift: 0.42, skyFill: 0.10, side: THREE.DoubleSide, roughness: 0.9 });
@@ -451,7 +502,7 @@ export class PlanetScatter {
           const s = rng.range(0.4, 0.72);
           const shade = rng.range(0.82, 1.05);
           const hueT = rng.next();
-          if (rng.next() > this.density) continue;
+          if (rng.next() > this.density * this._coverMul) continue;
           const dir = this._dirFromFace(face, u, v, this._dir);
           const r = this.planet.heightAt(dir);
           const alt = r - sea, lat = Math.abs(dir.y);
@@ -462,7 +513,7 @@ export class PlanetScatter {
           this._tangents(dir);
           if (this._slopeNy(dir, this._t0, this._b0) < SLOPE_MIN_SOFT) continue;
           const t = THREE.MathUtils.smoothstep(alt, 8, 62);
-          this._c.copy(GRASS_LOW).lerp(GRASS_HI, t * 0.7 + hueT * 0.2).multiplyScalar(shade);
+          this._c.copy(this._cover.grassLow).lerp(this._cover.grassHi, t * 0.7 + hueT * 0.2).multiplyScalar(shade);
           this._place(this._grass, gN++, dir, yaw, s, s, r);
           this._grass.setColorAt(gN - 1, this._c);
         }
@@ -476,7 +527,7 @@ export class PlanetScatter {
           const sxz = rng.range(0.5, 0.95), sy = rng.range(0.55, 1.15);
           const shade = rng.range(0.75, 1.0);
           const hueT = rng.next();
-          if (rng.next() > this.density * 0.8) continue;
+          if (rng.next() > this.density * 0.8 * this._coverMul) continue;
           const dir = this._dirFromFace(face, u, v, this._dir);
           const r = this.planet.heightAt(dir);
           const alt = r - sea, lat = Math.abs(dir.y);
@@ -487,7 +538,7 @@ export class PlanetScatter {
           this._tangents(dir);
           if (this._slopeNy(dir, this._t0, this._b0) < SLOPE_MIN_SOFT) continue;
           const t = THREE.MathUtils.smoothstep(alt, 8, 62);
-          this._c.copy(PLANT_LOW).lerp(PLANT_HI, t * 0.6 + hueT * 0.25).multiplyScalar(shade);
+          this._c.copy(this._cover.plantLow).lerp(this._cover.plantHi, t * 0.6 + hueT * 0.25).multiplyScalar(shade);
           this._place(this._plant, pN++, dir, yaw, sxz, sy, r);
           this._plant.setColorAt(pN - 1, this._c);
         }
@@ -501,7 +552,7 @@ export class PlanetScatter {
           const sxz = rng.range(0.4, 1.05), sy = rng.range(0.35, 0.9);
           const shade = rng.range(0.72, 1.0);
           const hueT = rng.next();
-          if (rng.next() > this.density * 0.7) continue;
+          if (rng.next() > this.density * 0.7 * this._rockMul) continue;
           const dir = this._dirFromFace(face, u, v, this._dir);
           const r = this.planet.heightAt(dir);
           const alt = r - sea, lat = Math.abs(dir.y);
@@ -512,7 +563,7 @@ export class PlanetScatter {
           this._tangents(dir);
           if (this._slopeNy(dir, this._t0, this._b0) < SLOPE_MIN_ROCK) continue;
           const t = THREE.MathUtils.smoothstep(alt, 40, snow + 20);
-          this._c.copy(ROCK_LOW).lerp(ROCK_HI, t * 0.8 + hueT * 0.15).multiplyScalar(shade);
+          this._c.copy(this._cover.rockLow).lerp(this._cover.rockHi, t * 0.8 + hueT * 0.15).multiplyScalar(shade);
           this._place(this._rock, rN++, dir, yaw, sxz, sy, r);
           this._rock.setColorAt(rN - 1, this._c);
         }

@@ -60,7 +60,22 @@ const TURN_SPEED = 0.9;      // rad/s — wander meander turn rate
 
 // Biome pool for buildCreature — earthy/temperate ids that read well against the
 // planet's grass/rock/snow bands. Picked deterministically from the planet seed.
+// Used only as a fallback when no biome descriptor is supplied.
 const BIOME_POOL = ['lush', 'lush', 'swamp', 'frozen', 'barren', 'crystal'];
+
+// Planet biome key -> a creature-biome id understood by buildCreature (creature
+// ids differ from planet keys: scorched worlds host 'volcanic' fauna, etc.).
+const CREATURE_BIOME = {
+  lush: 'lush', ocean: 'ocean', desert: 'desert', frozen: 'frozen',
+  toxic: 'toxic', scorched: 'volcanic', barren: 'barren', exotic: 'exotic',
+};
+
+// Per-biome population multiplier (mirrors the cover density scale) — the cap is
+// this * MAX_ACTIVE so herds thin out on arid/dead worlds (near-none on barren).
+const FAUNA_DENSITY = {
+  lush: 1.0, ocean: 0.85, toxic: 0.95, exotic: 0.8,
+  frozen: 0.45, desert: 0.32, scorched: 0.14, barren: 0.06,
+};
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
@@ -70,7 +85,8 @@ export class PlanetFauna {
    * @param {import('./planetsphere.js').PlanetSphere} planet
    * @param {object} [opts]
    * @param {number} [opts.seed]      deterministic placement seed
-   * @param {string} [opts.biome]     force a biome id for buildCreature
+   * @param {object|string} [opts.biome] biome descriptor (palette/key) or a raw
+   *                                   creature-biome id; drives fauna id + cap
    * @param {number} [opts.density=1] 0..1 scales spawn probability
    * @param {number} [opts.maxActive] override the population cap
    */
@@ -81,8 +97,22 @@ export class PlanetFauna {
     this.seaLevel = planet.seaLevel;
     this.seed = (opts.seed ?? 0xfa0a) >>> 0;
     this.density = clamp(opts.density ?? 1, 0, 1);
-    this.maxActive = opts.maxActive ?? MAX_ACTIVE;
-    this.biome = opts.biome ?? BIOME_POOL[hash32(this.seed, 0xb10e) % BIOME_POOL.length];
+
+    // Resolve the biome: a full descriptor object (planet biome), a raw creature-
+    // biome id string, or a deterministic pick when absent. The creature-biome id
+    // feeds buildCreature; the descriptor's key also scales the population cap so
+    // arid/dead worlds read sparse (barren -> ~none).
+    const b = opts.biome;
+    const key = (b && typeof b === 'object') ? b.key
+      : (typeof b === 'string' ? b : null);
+    this.biome = (b && typeof b === 'object')
+      ? (CREATURE_BIOME[b.key] || 'lush')
+      : (typeof b === 'string' ? b
+        : BIOME_POOL[hash32(this.seed, 0xb10e) % BIOME_POOL.length]);
+    const capMul = (key && FAUNA_DENSITY[key] != null) ? FAUNA_DENSITY[key] : 1;
+    let cap = Math.round(MAX_ACTIVE * capMul);
+    if (cap < 1 && capMul >= 0.10) cap = 1;   // keep a lone beast except on dead worlds
+    this.maxActive = opts.maxActive ?? cap;
 
     this.cellUV = CELL_M / this.radius;
     this._R = Math.ceil(SPAWN_R / CELL_M) + 1;   // cell neighbourhood radius

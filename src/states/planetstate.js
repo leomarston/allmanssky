@@ -165,18 +165,18 @@ export class PlanetState {
     // streamed ground cover (grass/plants/rocks) glued to the round surface in
     // the same floating-origin frame as the planet — makes walking feel alive.
     this.scatter = new PlanetScatter(this.scene, this.planet, {
-      seed, sunDir: SUN_DIR, density: 1,
+      seed, sunDir: SUN_DIR, density: 1, biome: this.biome,
     });
 
     // wandering creatures glued to the round surface in the same floating-origin
     // frame — they stream in / recycle as you walk and make the world feel alive.
-    this.fauna = new PlanetFauna(this.scene, this.planet, { seed });
+    this.fauna = new PlanetFauna(this.scene, this.planet, { seed, biome: this.biome });
 
     // pooled VFX (mining beam + sparks) and the harvestable resource layer —
     // both glued to the round surface in the same floating-origin frame.
     this.effects = new EffectsSystem(this.scene);
     this.resources = new PlanetResources(this.scene, this.planet, {
-      seed, sunDir: SUN_DIR, density: 1,
+      seed, sunDir: SUN_DIR, density: 1, biome: this.biome,
     });
 
     // ship visual (camera-relative; stays near origin for precision)

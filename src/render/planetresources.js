@@ -186,6 +186,7 @@ export class PlanetResources {
    * @param {number} [opts.seed]           deterministic placement seed
    * @param {THREE.Vector3} [opts.sunDir]  world-space unit vector toward the sun
    * @param {number} [opts.density=1]      0..1 scales node counts
+   * @param {object} [opts.biome]          biome descriptor (palette/moistureBias/key)
    */
   constructor(scene, planet, opts = {}) {
     this.scene = scene;
@@ -193,6 +194,20 @@ export class PlanetResources {
     this.radius = planet.radius;
     this.seaLevel = planet.seaLevel;
     this.density = Math.max(0, Math.min(1, opts.density ?? 1));
+
+    // Biome tints: the botanical pod reads as the world's flora (biome grass
+    // colour), and the mineral spire's albedo is nudged toward the biome rock so
+    // it doesn't clash with the terrain. Crystals stay untinted (cross-biome).
+    const P = (opts.biome && opts.biome.palette) ? opts.biome.palette : null;
+    if (P) {
+      const dry = Math.max(0, Math.min(1, 0.5 - 0.5 * (opts.biome.moistureBias ?? 0)));
+      this._podTint = new THREE.Color(P.grassLush).lerp(new THREE.Color(P.grassArid), dry);
+      this._spireTint = new THREE.Color(P.rock);
+    } else {
+      this._podTint = null;
+      this._spireTint = null;
+    }
+
     this.cellUV = CELL_M / this.radius;
     this.seed = (opts.seed ?? 0x5e50c) >>> 0;
     this.time = 0;
@@ -444,6 +459,10 @@ export class PlanetResources {
             // tint stays bright enough that emissive*tint still clears bloom.
             const cs = (a === 1) ? Math.max(shade, 0.95) : shade;
             this._c.set(itemColor(itemId)).multiplyScalar(cs);
+            // biome tinting: pull the botanical pod toward the world's flora and
+            // nudge the mineral spire toward the biome rock. Crystals untouched.
+            if (a === 2 && this._podTint) this._c.lerp(this._podTint, 0.45);
+            else if (a === 0 && this._spireTint) this._c.lerp(this._spireTint, 0.30);
             cfg.mesh.setColorAt(instIndex, this._c);
 
             this.nodes.push({
