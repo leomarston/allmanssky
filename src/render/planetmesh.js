@@ -1,8 +1,11 @@
 // From-space planet visual: a seeded 3D-simplex-fbm terrain shader paints
 // continents, oceans, ice caps and biome styling (volcanic lava veins,
-// crystal/exotic banding) from the planet's palette, with day/night lighting,
-// ocean sun-glint, atmospheric limb haze and optional night-side city glow.
-// Composes the atmosphere / cloud / ring sibling modules into one group.
+// crystal/exotic banding) from the planet's palette. Shading gives a crisp
+// day/night terminator with a warm golden-hour band, water/ice specular sheen,
+// a Rayleigh blue-shifted atmospheric limb (bloom-fed on the sun-lit crescent),
+// and a living night side (airglow + biome bioluminescence + city lights) so
+// the dark hemisphere is never dead black. Composes the atmosphere / cloud /
+// ring sibling modules into one group.
 import * as THREE from 'three';
 import { RNG, hash32, hashString } from '../core/rng.js';
 import { createAtmosphere } from './atmosphere.js';
@@ -155,6 +158,11 @@ uniform vec3 uCPeak;
 uniform vec3 uCCliff;
 uniform vec3 uCAccent;
 uniform vec3 uCGlow;
+uniform float uSpecAmt;
+uniform float uNightGlow;
+uniform float uBioAmt;
+uniform vec3 uBioColor;
+uniform vec3 uTwilightColor;
 varying vec3 vObj;
 varying vec3 vNormalW;
 varying vec3 vWorldPos;
@@ -227,28 +235,55 @@ void main() {
   }
 
   // --- lighting --------------------------------------------------------------
-  float ndl = dot(N, uSunDir);
-  float sphNdl = dot(sphN, uSunDir);
+  vec3 L = uSunDir;
+  vec3 Hv = normalize(L + V);
+  float ndl = dot(N, L);
+  float sphNdl = dot(sphN, L);
   float diff = clamp(ndl, 0.0, 1.0);
-  float dayMask = smoothstep(-0.03, 0.16, sphNdl);
 
-  // warm sunset tint hugging the terminator, stronger with thicker air
-  float term = (1.0 - smoothstep(0.0, 0.34, abs(sphNdl))) * uAtmoDensity;
-  vec3 sunTint = mix(uSunColor, uSunColor * vec3(1.3, 0.6, 0.35), term * 0.8);
+  // Terminator: a tight smoothstep on the *sphere* normal keeps the day/night
+  // divide crisp and readable from orbit while mountains still cast into night.
+  float dayMask = smoothstep(-0.06, 0.10, sphNdl);
+  float mu = clamp(dot(sphN, V), 0.0, 1.0);
+
+  // Golden-hour band hugging the day side of the terminator: peaks at
+  // sphNdl~0, warms the key light toward orange, thickens with atmosphere.
+  float band = 1.0 - smoothstep(0.0, 0.30, abs(sphNdl));
+  float sunset = band * clamp(sphNdl * 6.0 + 0.6, 0.0, 1.0);   // bias to the day side
+  float sunsetAmt = sunset * (0.4 + 0.6 * uAtmoDensity);
+  vec3 sunTint = mix(uSunColor, uTwilightColor, sunsetAmt);
 
   vec3 col = albedo * diff * sunTint;
 
-  // ocean sun glint
-  float glint = pow(clamp(dot(reflect(-uSunDir, N), V), 0.0, 1.0), 130.0);
-  col += sunTint * glint * water * (1.0 - frost * 0.7) * 1.7 * smoothstep(0.02, 0.2, diff);
+  // additive scattered warmth right at the day-side terminator (feeds bloom)
+  col += albedo * uTwilightColor * sunsetAmt * (0.15 + 0.35 * uAtmoDensity);
 
-  // atmospheric limb haze over the lit disc
-  float mu = clamp(dot(sphN, V), 0.0, 1.0);
-  float haze = pow(1.0 - mu, 2.4) * uAtmoDensity;
-  col += uAtmoColor * haze * (0.04 + 0.62 * clamp(sphNdl, 0.0, 1.0));
+  // --- specular sheen: liquid gloss on water, cold sheen on ice --------------
+  float nh = clamp(dot(N, Hv), 0.0, 1.0);
+  float sheenMask = max(water * (1.0 - frost * 0.6), frost * 0.5);
+  float spec = pow(nh, 48.0) * 0.5 + pow(nh, 380.0) * 1.6;  // broad lobe + tight sun-glint
+  float fres = pow(1.0 - mu, 5.0);
+  spec += fres * water * 0.4;                               // grazing water shimmer at the limb
+  col += sunTint * spec * sheenMask * uSpecAmt * smoothstep(-0.02, 0.14, sphNdl);
 
-  // night side: near-black with a whisper of albedo…
-  col += albedo * 0.012 * (1.0 - dayMask) * (0.35 + 0.65 * mu);
+  // --- atmospheric limb: Rayleigh blue-shift, brightest on the sun-lit limb ---
+  float limb = pow(1.0 - mu, 3.0);
+  vec3 rayleigh = uAtmoColor * vec3(0.72, 0.86, 1.28);
+  col += rayleigh * limb * uAtmoDensity * (0.05 + 0.95 * clamp(sphNdl + 0.12, 0.0, 1.0)) * 1.25;
+
+  // --- night side: never dead black ------------------------------------------
+  float night = 1.0 - dayMask;
+  col += albedo * 0.018 * night * (0.35 + 0.65 * mu) * uNightGlow;                 // whisper of albedo
+  col += uAtmoColor * night * uAtmoDensity * 0.05 * (0.3 + 0.7 * mu) * uNightGlow; // faint airglow
+
+  // bioluminescence / living self-glow: sparse light on the dark hemisphere
+  if (uBioAmt > 0.001) {
+    float bn  = snoise(dirN * 24.0 + uSeedOffset * 1.7);
+    float bn2 = snoise(dirN * 88.0 - uSeedOffset * 1.13);
+    float bio = smoothstep(0.42, 0.9, bn) * (0.4 + 0.6 * (bn2 * 0.5 + 0.5));
+    bio *= (1.0 - frost);
+    col += uBioColor * bio * uBioAmt * night * (0.35 + 0.65 * mu) * 2.2;
+  }
 
   // …and, on inhabited seeds, emissive settlement speckles near the terminator
   if (uCityAmt > 0.001) {
@@ -291,6 +326,9 @@ const clamp01 = (v) => THREE.MathUtils.clamp(v ?? 0, 0, 1);
  * @param {object} [opts]
  * @param {number} [opts.segments=96] sphere resolution (64–96)
  * @param {number|string|THREE.Color} [opts.sunColor] key-light tint (default warm white)
+ * @param {number|string|THREE.Color} [opts.twilightColor] sunset-band tint at the
+ *          terminator (default warm orange 0xff6a2a)
+ * @param {number} [opts.nightGlow=1] scales the dark-side airglow/self-glow floor
  * @returns {{group: THREE.Group,
  *           update(dt:number, cameraPos?:THREE.Vector3, sunDir?:THREE.Vector3):void,
  *           dispose():void}}
@@ -331,6 +369,24 @@ export function createPlanetVisual(def, opts = {}) {
   const atmoColor = new THREE.Color(def?.atmosphere?.colorHex ?? 0x88bbff);
   const sunColor = new THREE.Color(opts.sunColor ?? 0xfff0dc);
 
+  // --- surface-shading extras (forked RNG so terrain seeding is unchanged) ---
+  const shadeRng = rng.fork('shading');
+  // liquid gloss on water, cold sheen on ice — stronger on wet/frozen worlds
+  let specAmt = 0.9;
+  if (biome === 'ocean') specAmt = 1.55;
+  else if (sea > 0.35) specAmt = 1.2;
+  if (cold > 0.4 || biome === 'frozen') specAmt = Math.max(specAmt, 1.3);
+  // bioluminescence / living self-glow so the night side is never dead black
+  let bioAmt = 0;
+  if (biome === 'lush' || biome === 'swamp') bioAmt = shadeRng.range(0.5, 0.9);
+  else if (biome === 'ocean') bioAmt = shadeRng.range(0.4, 0.7);
+  else if (biome === 'toxic') bioAmt = shadeRng.range(0.6, 1.0);
+  else if (biome === 'exotic') bioAmt = shadeRng.range(0.55, 0.95);
+  else if (biome === 'irradiated') bioAmt = shadeRng.range(0.3, 0.6);
+  else if (biome === 'crystal') bioAmt = shadeRng.range(0.2, 0.45);
+  const twilightColor = new THREE.Color(opts.twilightColor ?? 0xff6a2a);
+  const bioColor = paletteColor(palette, 'accent', 0x66ffcc);
+
   // --- planet surface --------------------------------------------------------
   const mat = new THREE.ShaderMaterial({
     vertexShader: PLANET_VERT,
@@ -364,6 +420,11 @@ export function createPlanetVisual(def, opts = {}) {
       uCCliff: { value: paletteColor(palette, 'cliff', 0x5a5148) },
       uCAccent: { value: paletteColor(palette, 'accent', 0x8fd06a) },
       uCGlow: { value: paletteColor(palette, 'glow', 0xffd88a) },
+      uSpecAmt: { value: specAmt },
+      uNightGlow: { value: opts.nightGlow ?? 1.0 },
+      uBioAmt: { value: bioAmt },
+      uBioColor: { value: bioColor },
+      uTwilightColor: { value: twilightColor },
     },
   });
 
@@ -380,13 +441,23 @@ export function createPlanetVisual(def, opts = {}) {
   // --- companions ------------------------------------------------------------
   /** sub-visuals sharing the tilted frame; each gets update(dt, sunDir) */
   const parts = [];
-  if (atmoDensity > 0.04) {
+  if (atmoDensity > 0.02) {
     const atmo = createAtmosphere(radius, def.atmosphere);
     group.add(atmo.object3d);
     parts.push(atmo);
   }
-  if (def?.clouds && clamp01(def.clouds.coverage) > 0.04) {
-    const clouds = createCloudLayer(radius, def.clouds, hash32(seed, hashString('clouds')));
+  // Clouds: use the authored deck when present; otherwise dense-atmosphere
+  // worlds that rolled no deck still get a thin, sky-tinted high veil so the
+  // from-orbit read stays lush. (Lava worlds keep their bare, glowing crust.)
+  let cloudsDef = (def?.clouds && clamp01(def.clouds.coverage) > 0.04) ? def.clouds : null;
+  if (!cloudsDef && atmoDensity >= 0.5 && lavaAmt === 0) {
+    cloudsDef = {
+      coverage: 0.16 + 0.22 * atmoDensity,
+      colorHex: atmoColor.clone().lerp(new THREE.Color(0xffffff), 0.5),
+    };
+  }
+  if (cloudsDef) {
+    const clouds = createCloudLayer(radius, cloudsDef, hash32(seed, hashString('clouds')));
     group.add(clouds.object3d);
     parts.push(clouds);
   }
