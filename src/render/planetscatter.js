@@ -325,6 +325,12 @@ export class PlanetScatter {
     const bkey = (biome && biome.key) || 'lush';
     this._coverMul = COVER_DENSITY[bkey] ?? 1;
     this._rockMul = Math.max(0.5, this._coverMul);
+    // No-sea worlds (desert/scorched/barren) park the sea below the terrain
+    // floor, so "altitude above sea" no longer measures height above shore. Drop
+    // the beach lower-bound there, and honour the biome snow line (snowScale 0 =
+    // never caps) so dry scrub/lichen still streams across the low terrain.
+    this._hasSea = biome ? (biome.terrain?.hasSea ?? true) : true;
+    this._snowScale = biome ? (biome.terrain?.snowScale ?? 1) : 1;
 
     this.cellUV = CELL_M / this.radius;
     this.seed = (opts.seed ?? 0x5ca77e5) >>> 0;
@@ -506,8 +512,8 @@ export class PlanetScatter {
           const dir = this._dirFromFace(face, u, v, this._dir);
           const r = this.planet.heightAt(dir);
           const alt = r - sea, lat = Math.abs(dir.y);
-          const snow = 155 * (1 - lat * 0.7);
-          if (alt < GRASS_MIN_ALT || alt > snow * SNOW_MARGIN) continue;
+          const snow = (!this._hasSea || this._snowScale <= 0) ? 1e9 : 155 * this._snowScale * (1 - lat * 0.7);
+          if ((this._hasSea && alt < GRASS_MIN_ALT) || alt > snow * SNOW_MARGIN) continue;
           this._pos.copy(dir).multiplyScalar(r);
           if (this._pos.distanceToSquared(this._gp) > this._ring2) continue;
           this._tangents(dir);
@@ -531,8 +537,8 @@ export class PlanetScatter {
           const dir = this._dirFromFace(face, u, v, this._dir);
           const r = this.planet.heightAt(dir);
           const alt = r - sea, lat = Math.abs(dir.y);
-          const snow = 155 * (1 - lat * 0.7);
-          if (alt < GRASS_MIN_ALT || alt > snow * SNOW_MARGIN) continue;
+          const snow = (!this._hasSea || this._snowScale <= 0) ? 1e9 : 155 * this._snowScale * (1 - lat * 0.7);
+          if ((this._hasSea && alt < GRASS_MIN_ALT) || alt > snow * SNOW_MARGIN) continue;
           this._pos.copy(dir).multiplyScalar(r);
           if (this._pos.distanceToSquared(this._gp) > this._ring2) continue;
           this._tangents(dir);
@@ -556,7 +562,7 @@ export class PlanetScatter {
           const dir = this._dirFromFace(face, u, v, this._dir);
           const r = this.planet.heightAt(dir);
           const alt = r - sea, lat = Math.abs(dir.y);
-          const snow = 155 * (1 - lat * 0.7);
+          const snow = (!this._hasSea || this._snowScale <= 0) ? 1e9 : 155 * this._snowScale * (1 - lat * 0.7);
           if (alt < 0 || alt > snow + 45) continue;       // rocks up onto the caps
           this._pos.copy(dir).multiplyScalar(r);
           if (this._pos.distanceToSquared(this._gp) > this._ring2) continue;
