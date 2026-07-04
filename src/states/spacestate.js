@@ -14,6 +14,8 @@ import { ShipController } from '../gameplay/shipcontrol.js';
 import { SpaceCombat } from '../gameplay/combat.js';
 import { SpaceMining } from '../gameplay/mining.js';
 import { SpaceLife } from '../gameplay/spacelife.js';
+import { AsteroidField } from '../render/asteroidfield.js';
+import { ITEMS, itemColor } from '../gameplay/items.js';
 import { createCockpit } from '../render/cockpit.js';
 import { audio } from '../audio/audio.js';
 
@@ -96,6 +98,9 @@ export class SpaceState {
     this.combat = new SpaceCombat(this.scene, this.effects, gs, this.system, this.shipCtl);
     this.mining = new SpaceMining(this.scene, this.effects, gs, this);
     this.life = new SpaceLife(this.scene, this.system, gs, this);
+    // local fly-through minable asteroid field around the ship (NMS-style)
+    this.field = new AsteroidField(this.scene, this.system, { center: this.shipCtl.position });
+    this._fieldFireCd = 0;
 
     ctx.hud.setMode('space');
     audio.setScene('space', { danger: this.system.pirateThreat });
@@ -202,6 +207,8 @@ export class SpaceState {
     audio.engine(this.shipCtl.throttle * (this.shipCtl.boost ? 1 : 0.7));
     this.combat.update(dt, this.camera);
     this.mining.update(dt, this.camera);
+    this.field.update(dt, this.shipCtl.position, this.shipCtl.velocity);
+    this._updateField(dt);
 
     if (!this._warping) this._interactions(dt);
     // after _interactions so anomaly prompts can claim the interact label
@@ -226,6 +233,49 @@ export class SpaceState {
       });
     }
     this._hud(dt);
+  }
+
+  /**
+   * Local asteroid field: gentle collision nudge so you weave rather than clip
+   * through rocks, plus forward-fire mining (LMB when not in a dogfight) that
+   * chips a rock and grants its resource on destruction.
+   */
+  _updateField(dt) {
+    // collision nudge
+    const near = this.field.nearestWithin(this.shipCtl.position, 16);
+    if (near) {
+      const push = this.shipCtl.position.clone().sub(this.field.positionOf(near));
+      const d = push.length(), minD = near.radius + 6;
+      if (d > 1e-3 && d < minD) {
+        this.shipCtl.position.add(push.multiplyScalar((minD - d) / d));
+        this.shipCtl.velocity.multiplyScalar(0.6);
+        this.shipCtl.shake(0.3);
+      }
+    }
+    // forward-fire mining (yields to combat while hostiles are present)
+    this._fieldFireCd -= dt;
+    const gs = this.ctx.gameState;
+    const firing = input.mouseDown[0] && input.aiming && !this._warping && !this.combat.hasHostiles;
+    if (!firing || this._fieldFireCd > 0) return;
+    const origin = this.shipCtl.position, dir = this.shipCtl.forward;
+    const hit = this.field.hitScan(origin, dir, 260);
+    if (!hit) return;
+    this._fieldFireCd = 0.22;
+    this.effects.laserBolt(origin.clone().addScaledVector(dir, 3.2), dir, 420, '#ffd04a');
+    audio.sfx('laser', { volume: 0.5 });
+    const res = this.field.damage(hit.asteroid, 1);
+    if (!res) return;
+    this.effects.sparks(hit.point, dir.clone().negate(), itemColor(res.resource));
+    audio.sfx('mineHit');
+    if (res.destroyed) {
+      this.effects.explosion(this.field.positionOf(hit.asteroid), 0.7, '#ffcaa0');
+      audio.sfx('collect');
+      const got = gs.addItem(res.resource, res.amount);
+      if (got > 0) {
+        events.emit('resource:mined', { id: res.resource, amount: got });
+        events.emit('notify', { text: `+${got} ${ITEMS[res.resource].name}`, tone: 'good' });
+      }
+    }
   }
 
   /**
@@ -421,6 +471,7 @@ export class SpaceState {
     this.effects?.dispose?.();
     this.mining?.dispose?.();
     this.combat?.dispose?.();
+    this.field?.dispose?.();
     this.life?.dispose?.();
     for (const p of this.planets) p.visual.dispose?.();
     this.starfield?.object3d && this.scene.remove(this.starfield.object3d);
