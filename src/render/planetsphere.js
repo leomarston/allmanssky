@@ -282,6 +282,7 @@ export class PlanetSphere {
     this.terrainMat.onBeforeCompile = (sh) => {
       sh.uniforms.uDetail = { value: this._detailTex };
       sh.uniforms.uBumpAmt = { value: 0.9 };
+      sh.uniforms.uSeaLevel = { value: this.seaLevel };
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>',
           '#include <common>\nvarying vec3 vAmsObj;\nvarying vec3 vAmsObjN;\nvarying vec3 vAmsView;')
@@ -296,6 +297,7 @@ export class PlanetSphere {
           '#include <common>',
           'uniform sampler2D uDetail;',
           'uniform float uBumpAmt;',
+          'uniform float uSeaLevel;',
           'varying vec3 vAmsObj;',
           'varying vec3 vAmsObjN;',
           'varying vec3 vAmsView;',
@@ -316,6 +318,10 @@ export class PlanetSphere {
         .replace('#include <roughnessmap_fragment>', [
           '#include <roughnessmap_fragment>',
           'roughnessFactor *= 0.86 + 0.26 * texture2D(uDetail, amsUV(vAmsObj, abs(normalize(vAmsObjN)))*0.031).g;',
+          // wet-sand sheen: the first few metres above the waterline go glossy so
+          // the sun glints on the shoreline (HDR spec feeds the bloom gently).
+          'float amsWet = smoothstep(6.0, 0.0, length(vAmsObj) - uSeaLevel);',
+          'roughnessFactor *= mix(1.0, 0.45, amsWet);',
         ].join('\n'))
         .replace('#include <normal_fragment_begin>', [
           '#include <normal_fragment_begin>',
