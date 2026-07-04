@@ -88,18 +88,49 @@ function mergeGeos(geos) {
   return out;
 }
 
-/** A tall angular mineral shard: jittered 5-sided pyramid. Base at y=0. */
+/**
+ * A clustered mineral formation: 4-5 low-poly shards fanned from a common base —
+ * one dominant tall hero prism plus shorter tilted satellites — merged into one
+ * geometry. flatShading reads the merged facets as sharp crystalline shards.
+ * Base at y=0.
+ */
 function buildSpire(rng) {
-  const g = new THREE.ConeGeometry(0.5, 3.0, 5, 1);
-  const p = g.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    p.setXYZ(i,
-      p.getX(i) + rng.range(-0.08, 0.08),
-      p.getY(i) + rng.range(-0.12, 0.12),
-      p.getZ(i) + rng.range(-0.08, 0.08));
+  const shards = [];
+  const N = 4 + (rng.next() < 0.5 ? 0 : 1);   // 4-5 shards
+  const off = new THREE.Vector3();
+  const axis = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const one = new THREE.Vector3(1, 1, 1);
+  const m = new THREE.Matrix4();
+  for (let i = 0; i < N; i++) {
+    const hero = i === 0;
+    const h = hero ? rng.range(2.6, 3.4) : rng.range(1.0, 2.2);
+    const rad = rng.range(0.28, 0.5);
+    const sides = rng.next() < 0.5 ? 4 : 5;   // 4-5 sided prism
+    const g = new THREE.ConeGeometry(rad, h, sides, 1);
+    const p = g.attributes.position;
+    for (let k = 0; k < p.count; k++) {         // small vertex jitter
+      p.setXYZ(k,
+        p.getX(k) + rng.range(-0.05, 0.05),
+        p.getY(k) + rng.range(-0.06, 0.06),
+        p.getZ(k) + rng.range(-0.05, 0.05));
+    }
+    g.computeVertexNormals();
+    g.translate(0, h / 2, 0);                   // base at y=0, tip at +h
+    const spread = hero ? 0.12 : 0.42;          // hero centred, satellites fanned
+    off.set(rng.range(-spread, spread), 0, rng.range(-spread, spread));
+    axis.set(rng.range(-1, 1), 0, rng.range(-1, 1));
+    if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
+    axis.normalize();
+    const tilt = hero ? rng.range(-0.12, 0.12) : rng.range(-0.42, 0.42);
+    q.setFromAxisAngle(axis, tilt);
+    m.compose(off, q, one);
+    g.applyMatrix4(m);
+    shards.push(g);
   }
-  g.computeVertexNormals();
-  return baseToFloor(g);
+  const merged = mergeGeos(shards);
+  for (const g of shards) g.dispose();          // dispose temp shard geometries
+  return baseToFloor(merged);
 }
 
 /** A faceted crystal cluster: 3-4 hexagonal prisms fanned from a common base. */
@@ -112,9 +143,10 @@ function buildCrystal(rng) {
   const one = new THREE.Vector3(1, 1, 1);
   const m = new THREE.Matrix4();
   for (let i = 0; i < N; i++) {
-    const h = rng.range(1.1, 1.9);
+    // 1-2 tall hero prisms carry the bloom halo; the rest are shorter companions.
+    const h = (i === 0) ? rng.range(2.0, 2.8) : rng.range(0.8, 1.7);
     const rad = rng.range(0.15, 0.28);
-    const g = new THREE.ConeGeometry(rad, h, 6, 1);
+    const g = new THREE.ConeGeometry(rad, h, 5, 1);
     g.translate(0, h / 2, 0);                 // base at y=0, tip at +h
     off.set(rng.range(-0.34, 0.34), 0, rng.range(-0.34, 0.34));
     axis.set(rng.range(-1, 1), 0, rng.range(-1, 1));
@@ -192,9 +224,9 @@ export class PlanetResources {
     const crystalH = this.crystalGeo.boundingBox.max.y;
     const podH = this.podGeo.boundingBox.max.y;
 
-    this.spireMat = this._makeMat({ key: 'spire', roughness: 0.85, metalness: 0.02, flat: true, emissiveBoost: 0 });
-    this.crystalMat = this._makeMat({ key: 'crystal', roughness: 0.32, metalness: 0.12, flat: true, emissiveBoost: 1.5, pulse: true });
-    this.podMat = this._makeMat({ key: 'pod', roughness: 0.7, metalness: 0.0, flat: false, emissiveBoost: 0.34 });
+    this.spireMat = this._makeMat({ key: 'spire', roughness: 0.55, metalness: 0.14, flat: true, emissiveBoost: 0, floor: 0.12, rim: 'vec3(0.35,0.5,0.72)*0.9' });
+    this.crystalMat = this._makeMat({ key: 'crystal', roughness: 0.32, metalness: 0.12, flat: true, emissiveBoost: 2.4, pulse: true, rim: 'diffuseColor.rgb*1.6' });
+    this.podMat = this._makeMat({ key: 'pod', roughness: 0.7, metalness: 0.0, flat: false, emissiveBoost: 0.6, rim: 'diffuseColor.rgb*0.5' });
 
     this._spire = this._mkMesh(this.spireGeo, this.spireMat, 'resources:spire');
     this._crystal = this._mkMesh(this.crystalGeo, this.crystalMat, 'resources:crystal');
@@ -265,9 +297,15 @@ export class PlanetResources {
       metalness: opt.metalness ?? 0.0,
       flatShading: !!opt.flat,
     });
-    if (opt.emissiveBoost > 0) {
-      const boost = opt.emissiveBoost.toFixed(3);
-      const pulse = opt.pulse ? '(0.82 + 0.18 * sin(uTime * 2.2))' : '1.0';
+    const hasEmissive = opt.emissiveBoost > 0;
+    // Attach for glow (emissiveBoost) OR a flat sky-fill floor OR a fresnel rim,
+    // so even a matte node (spire, emissiveBoost 0) can read as lit rather than a
+    // black anti-sun silhouette.
+    if (hasEmissive || opt.floor || opt.rim) {
+      const boost = (opt.emissiveBoost ?? 0).toFixed(3);
+      const pulse = opt.pulse ? '(1.05 + 0.35 * sin(uTime * 2.2))' : '1.0';
+      const floor = opt.floor ? opt.floor.toFixed(3) : null;
+      const rim = opt.rim || null;
       const uniforms = this.uniforms;
       mat.onBeforeCompile = (sh) => {
         if (opt.pulse) {
@@ -275,10 +313,17 @@ export class PlanetResources {
           sh.fragmentShader = sh.fragmentShader.replace('#include <common>',
             '#include <common>\nuniform float uTime;');
         }
-        sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', [
-          '#include <emissivemap_fragment>',
-          `totalEmissiveRadiance += diffuseColor.rgb * (${boost} * ${pulse});`,
-        ].join('\n'));
+        // All injections sit at the emissivemap_fragment hook — the only place
+        // diffuseColor + view-space `normal` + vViewPosition all exist.
+        const frag = ['#include <emissivemap_fragment>'];
+        if (hasEmissive) frag.push(`totalEmissiveRadiance += diffuseColor.rgb * (${boost} * ${pulse});`);
+        if (floor) frag.push(`totalEmissiveRadiance += diffuseColor.rgb * ${floor};`);
+        if (rim) {
+          frag.push('vec3 amsV = normalize(vViewPosition);');
+          frag.push('float amsF = pow(1.0 - clamp(dot(normalize(normal), amsV), 0.0, 1.0), 3.0);');
+          frag.push(`totalEmissiveRadiance += (${rim}) * amsF;`);
+        }
+        sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', frag.join('\n'));
       };
       mat.customProgramCacheKey = () => `ams-planetres-${opt.key}`;
     }
@@ -395,7 +440,10 @@ export class PlanetResources {
             const itemId = cfg.pickItem(alt, pickR);
             const instIndex = counts[a]++;
             this._place(cfg.mesh, instIndex, dir, yaw, sxz, sy, r);
-            this._c.set(itemColor(itemId)).multiplyScalar(shade);
+            // floor per-instance shade for crystals (archetype a===1) so their
+            // tint stays bright enough that emissive*tint still clears bloom.
+            const cs = (a === 1) ? Math.max(shade, 0.95) : shade;
+            this._c.set(itemColor(itemId)).multiplyScalar(cs);
             cfg.mesh.setColorAt(instIndex, this._c);
 
             this.nodes.push({

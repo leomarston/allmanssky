@@ -57,12 +57,12 @@ const PER_CELL_ROCK = 3;
 
 // --- palette ----------------------------------------------------------------
 function col(hex) { return new THREE.Color(hex); }
-const GRASS_LOW = col(0x4f7a3a);   // matches PlanetSphere grass band
-const GRASS_HI = col(0x77803f);    // drier olive higher up
-const PLANT_LOW = col(0x3f6f34);
-const PLANT_HI = col(0x6f7a3a);
-const ROCK_LOW = col(0x6d5f4d);    // matches PlanetSphere rock band
-const ROCK_HI = col(0x9a9488);     // paler / snow-dusted near the caps
+const GRASS_LOW = col(0x5f9d3c);   // matches PlanetSphere grass band
+const GRASS_HI = col(0x93a84a);    // drier olive higher up
+const PLANT_LOW = col(0x4f8a38);
+const PLANT_HI = col(0x86933f);
+const ROCK_LOW = col(0x7c6e58);    // matches PlanetSphere rock band
+const ROCK_HI = col(0xa9a394);     // paler / snow-dusted near the caps
 
 // --- geometry helpers -------------------------------------------------------
 
@@ -122,7 +122,7 @@ function buildTuft(rng) {
       const curve = lean * t * t;
       const cX = bx + nx * curve, cZ = bz + nz * curve;
       const nyB = 0.8, inv = 1 / Math.hypot(nx, nyB, nz);
-      const g = (0.40 + 0.55 * t) * bright;
+      const g = (0.62 + 0.40 * t) * bright;
       for (let s = 0; s < 2; s++) {
         const sign = s === 0 ? -1 : 1;
         pos[vo * 3] = cX + tx * halfW * sign;
@@ -196,6 +196,7 @@ function makeCoverMat(uniforms, opt) {
   });
   const wind = (opt.wind ?? 0).toFixed(3);
   const lift = (opt.lift ?? 0).toFixed(3);
+  const skyFill = (opt.skyFill ?? 0).toFixed(3);
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader
@@ -241,6 +242,9 @@ function makeCoverMat(uniforms, opt) {
       .replace('#include <emissivemap_fragment>', [
         '#include <emissivemap_fragment>',
         `float amsLift = ${lift};`,
+        // view-independent sky-fill so shadowed cover/rocks don't collapse to
+        // near-black. FILL, not glow — kept well under the bloom threshold.
+        `totalEmissiveRadiance += diffuseColor.rgb * ${skyFill};`,
         // self-lift: thin vertical cover soaks the blue sky fill and would read
         // dark — push its own colour up the blade so it looks sunlit.
         'totalEmissiveRadiance += diffuseColor.rgb * (amsLift * vH + amsLift * 0.22);',
@@ -304,9 +308,9 @@ export class PlanetScatter {
     this.plantGeo = buildPlant(grng.fork('plant'));
     this.rockGeo = buildRock(grng.fork('rock'));
 
-    this.grassMat = makeCoverMat(this.uniforms, { key: 'grass', wind: 1.0, lift: 0.5, side: THREE.DoubleSide, roughness: 0.92 });
-    this.plantMat = makeCoverMat(this.uniforms, { key: 'plant', wind: 0.45, lift: 0.24, side: THREE.DoubleSide, roughness: 0.9 });
-    this.rockMat = makeCoverMat(this.uniforms, { key: 'rock', wind: 0.0, lift: 0.0, side: THREE.FrontSide, roughness: 0.95 });
+    this.grassMat = makeCoverMat(this.uniforms, { key: 'grass', wind: 1.0, lift: 0.62, skyFill: 0.10, side: THREE.DoubleSide, roughness: 0.92 });
+    this.plantMat = makeCoverMat(this.uniforms, { key: 'plant', wind: 0.45, lift: 0.42, skyFill: 0.10, side: THREE.DoubleSide, roughness: 0.9 });
+    this.rockMat = makeCoverMat(this.uniforms, { key: 'rock', wind: 0.0, lift: 0.16, skyFill: 0.08, side: THREE.FrontSide, roughness: 0.95 });
 
     this._grass = this._mkMesh(this.grassGeo, this.grassMat, GRASS_CAP, 'scatter:grass');
     this._plant = this._mkMesh(this.plantGeo, this.plantMat, PLANT_CAP, 'scatter:plant');
@@ -445,7 +449,7 @@ export class PlanetScatter {
           const v = (cellJ + rng.next()) * cellUV;
           const yaw = rng.next() * Math.PI * 2;
           const s = rng.range(0.4, 0.72);
-          const shade = rng.range(0.62, 0.9);
+          const shade = rng.range(0.82, 1.05);
           const hueT = rng.next();
           if (rng.next() > this.density) continue;
           const dir = this._dirFromFace(face, u, v, this._dir);
@@ -470,7 +474,7 @@ export class PlanetScatter {
           const v = (cellJ + rng.next()) * cellUV;
           const yaw = rng.next() * Math.PI * 2;
           const sxz = rng.range(0.5, 0.95), sy = rng.range(0.55, 1.15);
-          const shade = rng.range(0.55, 0.85);
+          const shade = rng.range(0.75, 1.0);
           const hueT = rng.next();
           if (rng.next() > this.density * 0.8) continue;
           const dir = this._dirFromFace(face, u, v, this._dir);
@@ -495,7 +499,7 @@ export class PlanetScatter {
           const v = (cellJ + rng.next()) * cellUV;
           const yaw = rng.next() * Math.PI * 2;
           const sxz = rng.range(0.4, 1.05), sy = rng.range(0.35, 0.9);
-          const shade = rng.range(0.5, 0.9);
+          const shade = rng.range(0.72, 1.0);
           const hueT = rng.next();
           if (rng.next() > this.density * 0.7) continue;
           const dir = this._dirFromFace(face, u, v, this._dir);
