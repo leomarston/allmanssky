@@ -53,6 +53,39 @@ function smoothstep(a, b, x) {
   return t * t * (3 - 2 * t);
 }
 
+// A small tiling detail texture (R = fine grain height, G = mid mottle) baked
+// once from wrapping torus-sampled simplex noise — the source for in-shader
+// micro-relief normals + albedo/roughness break-up on the terrain. Zero assets.
+function makeDetailTexture(seed) {
+  const S = 256;
+  const n1 = new SimplexNoise(hash32(seed, 771) >>> 0);
+  const n2 = new SimplexNoise(hash32(seed, 772) >>> 0);
+  const img = new Uint8Array(S * S * 4);
+  const TAU = Math.PI * 2;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const a = (x / S) * TAU, b = (y / S) * TAU;
+      const nx = Math.cos(a) * 1.6, ny = Math.sin(a) * 1.6;
+      const nz = Math.cos(b) * 1.6, nw = Math.sin(b) * 1.6;
+      const fine = n1.fbm3(nx * 2.3 + nz * 1.7, ny * 2.3 + nw * 1.7, nz * 2.9, 4)
+        + n1.noise3D(nx * 7.1, ny * 7.1, nz * 7.1 + nw * 3.3) * 0.35;
+      const mid = n2.fbm3(nx + nz * 0.8, ny + nw * 0.8, nw * 1.2, 3);
+      const i = (y * S + x) * 4;
+      img[i] = Math.max(0, Math.min(255, 128 + fine * 108));
+      img[i + 1] = Math.max(0, Math.min(255, 128 + mid * 118));
+      img[i + 2] = 128;
+      img[i + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(img, S, S, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 // Ridged multifractal in 3D (sharp mountain ridges), returns roughly [0,1].
 function ridged3(noise, x, y, z, octaves, lacunarity = 2.0, gain = 0.5) {
   let amp = 0.5, freq = 1, sum = 0, prev = 1;
@@ -234,8 +267,78 @@ export class PlanetSphere {
     // directional (sun) light. Works on SwiftShader; log-depth is injected by
     // three automatically when the renderer enables logarithmicDepthBuffer.
     this.terrainMat = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.95, metalness: 0.0,
+      vertexColors: true, roughness: 0.92, metalness: 0.0,
     });
+
+    // Procedural micro-relief: sample a baked detail texture in OBJECT space
+    // (the chunk vertices are absolute planet-local ~radius-magnitude and STABLE
+    // — world space rebases every frame and would make the grain crawl) via a
+    // dominant-axis (cube) projection, and inject albedo/roughness break-up plus
+    // a tangent-frame bump normal. All distance-faded so far/orbit chunks pay
+    // nothing. Chunk meshes are translation-only (root holds the rebase), so
+    // object direction == world direction and mat3(viewMatrix) rotates the bump
+    // to view space. SwiftShader-safe: branch-light ALU, no loops.
+    this._detailTex = makeDetailTexture(hash32(seed, 0xd7) >>> 0);
+    this.terrainMat.onBeforeCompile = (sh) => {
+      sh.uniforms.uDetail = { value: this._detailTex };
+      sh.uniforms.uBumpAmt = { value: 0.9 };
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>',
+          '#include <common>\nvarying vec3 vAmsObj;\nvarying vec3 vAmsObjN;\nvarying vec3 vAmsView;')
+        .replace('#include <begin_vertex>', [
+          '#include <begin_vertex>',
+          'vAmsObj = transformed;',
+          'vAmsObjN = normalize(normal);',
+          'vAmsView = (modelViewMatrix * vec4(transformed, 1.0)).xyz;',
+        ].join('\n'));
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', [
+          '#include <common>',
+          'uniform sampler2D uDetail;',
+          'uniform float uBumpAmt;',
+          'varying vec3 vAmsObj;',
+          'varying vec3 vAmsObjN;',
+          'varying vec3 vAmsView;',
+          // dominant-axis (cube) projection of an object point -> 2D tile coord.
+          'vec2 amsUV(vec3 p, vec3 an){ if (an.x>=an.y&&an.x>=an.z) return p.yz; else if (an.y>=an.z) return p.xz; return p.xy; }',
+          'float amsDetailH(vec2 w){ return texture2D(uDetail, w*0.19).r*0.72 + texture2D(uDetail, w*0.031).g*0.28; }',
+        ].join('\n'))
+        .replace('#include <color_fragment>', [
+          '#include <color_fragment>',
+          'vec3 amsAbs = abs(normalize(vAmsObjN));',
+          'vec2 amsW = amsUV(vAmsObj, amsAbs);',
+          'float amsDist = length(vAmsView);',
+          'float amsFade = 1.0 - smoothstep(120.0, 520.0, amsDist);',
+          'float amsGrain = texture2D(uDetail, amsW*0.19).r;',
+          'float amsMott = texture2D(uDetail, amsW*0.031).g;',
+          'diffuseColor.rgb *= 1.0 + (amsGrain-0.5)*0.30*amsFade + (amsMott-0.5)*0.20;',
+        ].join('\n'))
+        .replace('#include <roughnessmap_fragment>', [
+          '#include <roughnessmap_fragment>',
+          'roughnessFactor *= 0.86 + 0.26 * texture2D(uDetail, amsUV(vAmsObj, abs(normalize(vAmsObjN)))*0.031).g;',
+        ].join('\n'))
+        .replace('#include <normal_fragment_begin>', [
+          '#include <normal_fragment_begin>',
+          '{',
+          '  vec3 amsN = normalize(vAmsObjN);',
+          '  float amsD = length(vAmsView);',
+          '  float amsMF = 1.0 - smoothstep(60.0, 340.0, amsD);',
+          '  if (amsMF > 0.001) {',
+          '    vec3 amsA = abs(amsN);',
+          '    vec3 amsT = normalize(cross(amsN, amsA.y < 0.99 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0)));',
+          '    vec3 amsBt = cross(amsN, amsT);',
+          '    float e = 0.6;',
+          '    float hL = amsDetailH(amsUV(vAmsObj - amsT*e, amsA));',
+          '    float hR = amsDetailH(amsUV(vAmsObj + amsT*e, amsA));',
+          '    float hDn = amsDetailH(amsUV(vAmsObj - amsBt*e, amsA));',
+          '    float hUp = amsDetailH(amsUV(vAmsObj + amsBt*e, amsA));',
+          '    vec3 amsBump = normalize(amsN - (amsT*(hR-hL) + amsBt*(hUp-hDn)) * uBumpAmt * amsMF);',
+          '    normal = normalize(mat3(viewMatrix) * amsBump);',
+          '  }',
+          '}',
+        ].join('\n'));
+    };
+    this.terrainMat.customProgramCacheKey = () => 'ams-psphere-detail-v1';
 
     this._buildFaces();
     this._buildSea();
@@ -591,6 +694,7 @@ export class PlanetSphere {
     for (let i = 0; i < 6; i++) this.faces[i]._destroy();
     this.faces = null;
     this.terrainMat.dispose();
+    this._detailTex?.dispose();
     this.seaMesh.geometry.dispose(); this.seaMat.dispose();
     this.atmoMesh.geometry.dispose(); this.atmoMat.dispose();
     this.scene.remove(this.root);
