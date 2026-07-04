@@ -11,6 +11,7 @@ import { QuestSystem } from './gameplay/quests.js';
 import { SpaceState } from './states/spacestate.js';
 import { SurfaceState } from './states/surfacestate.js';
 import { HangarState } from './states/hangarstate.js';
+import { PlanetState } from './states/planetstate.js';
 import { HUD } from './ui/hud.js';
 import { Screens } from './ui/screens.js';
 import * as notifications from './ui/notifications.js';
@@ -232,6 +233,20 @@ class Game {
           faction: sys.station?.faction ?? 'meridian',
           stationName: sys.station?.name ?? 'Test Anchorage',
         });
+      } else if (debugState === 'planet') {
+        // ISOLATED seamless spherical-planet mode (fly from orbit, walk the
+        // round world). Constructed directly — deliberately NOT routed through
+        // switchState so nothing in the live space/surface flow is touched.
+        const old = this.state;
+        old?.exit?.();
+        const st = new PlanetState(this.ctx);
+        this.state = st;
+        await st.enter({ seed: Number(q.get('seed') ?? GALAXY_SEED_DEFAULT) });
+        this.engine.setScene(st.scene, st.camera, {
+          bloomStrength: 0.6, bloomRadius: 0.6, bloomThreshold: 0.9,
+          aoEnabled: false, godrayEnabled: false,
+        });
+        events.emit('state:change', 'planet', old?.name);
       } else {
         await this.switchState('space', { systemId: this.gameState.currentSystemId, mode: 'start' });
       }

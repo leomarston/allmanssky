@@ -1,0 +1,489 @@
+// Planet state (DEBUG / ISOLATED) — the REAL seamless spherical planet, playable.
+//
+// Reached ONLY via ?state=planet. Constructs a PlanetSphere (the verified
+// cube-sphere LOD world in src/render/planetsphere.js) and flies you from orbit
+// down to a walk on the round surface as ONE continuous experience — no fade,
+// no cut. Nothing here touches SpaceState / SurfaceState or the live flow; the
+// only wiring outside this file is an additive ?state=planet branch in main.js.
+//
+// FLOATING ORIGIN (precision):
+//   PlanetSphere.update(dt, camWorldPos) rebases its root to
+//   (planetCenter - camWorldPos), so the render camera always sits AT the world
+//   origin and everything it sees is small-magnitude — float32 holds at
+//   planetary scale. We therefore track the player's true position as
+//   `playerUniPos` (a "universe" Vector3, measured from the planet centre at the
+//   origin) which can be tens of thousands of units, feed THAT to planet.update
+//   every frame, and keep the THREE camera pinned to (0,0,0) — only its
+//   orientation changes.
+//
+// TWO MODES, one seam:
+//   'ship' — sphere-aware arcade flight. Pitch/yaw/roll + throttle steer a
+//            quaternion; gentle gravity pulls toward planet centre; a soft
+//            self-levelling torque keeps "up" near the local radial so the
+//            horizon reads right. Descend continuously; PlanetSphere refines LOD.
+//   'foot' — sphere character controller. "up" = radial dir = normalize(pos);
+//            gravity along -up; WASD move tangent to the sphere on a basis built
+//            from up + heading; jump; every frame re-project the eye to
+//            heightAt(dir)+EYE so you stay glued to terrain as it refines.
+//
+//   F disembarks ship→foot near the ground (no fade). G takes off foot→ship.
+import * as THREE from 'three';
+import { input } from '../core/input.js';
+import { buildShip } from '../render/shipmesh.js';
+import { PlanetSphere } from '../render/planetsphere.js';
+
+// --- feel constants (borrowed from the flat controllers where sensible) ------
+const EYE_HEIGHT = 1.7;             // player.js
+const WALK_SPEED = 5.2;             // player.js
+const SPRINT_MULT = 1.65;           // player.js
+const JUMP_SPEED = 6.5;             // ~player.js JUMP_SPEED
+const FOOT_GRAVITY = 12.0;          // radial m/s^2 — snappy but grounded
+const AIR_CONTROL = 0.28;           // ~player.js
+const LOOK_SENS = 0.0023;           // player.js sensitivity
+
+const SHIP_MAX_SPEED = 340;         // units/s — brisk enough to descend from orbit
+const SHIP_BOOST = 3.0;
+const SHIP_PITCH = 1.6, SHIP_YAW = 1.1, SHIP_ROLL = 2.2;   // shipcontrol.js rates
+const SHIP_GRAVITY = 6.0;           // gentle radial pull
+const SHIP_BANK_RATE = 1.5;         // self-level "up" toward radial (per sec)
+const SHIP_SENS = 0.0016;           // shipcontrol.js steering sens
+
+const MIN_CLEARANCE = 3.5;          // ship never dips below terrain + this
+const LAND_MAX_AGL = 120;           // F disembark allowed under this AGL
+const DISEMBARK_MAX_SPEED = 70;     // ...and under this speed
+const PLANET_RADIUS = 4000;
+const PLANET_SEED_DEFAULT = 20260704;   // parity with test/pages/planet.html
+
+const SUN_DIR = new THREE.Vector3(0.55, 0.42, 0.72).normalize();
+const SHIP_OFFSET = new THREE.Vector3(0, -1.1, -4.0);   // chase view, camera at origin
+
+export class PlanetState {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.name = 'planet';
+    this.mode = 'ship';                 // 'ship' | 'foot'
+
+    // --- universe-frame bookkeeping (all measured from planet centre = origin)
+    this.playerUniPos = new THREE.Vector3();   // eye/craft position, may be huge
+    this.shipVel = new THREE.Vector3();        // universe-space m/s (ship mode)
+    this.shipQuat = new THREE.Quaternion();    // ship orientation
+    this.shipAngVel = new THREE.Vector3();     // pitch/yaw/roll rates
+    this.throttle = 0;
+    this.boost = false;
+
+    this.footVel = new THREE.Vector3();        // universe-space m/s (foot mode)
+    this.footFwd = new THREE.Vector3(0, 0, -1);// persistent tangent heading
+    this.pitch = 0;
+    this.onGround = false;
+
+    this._interactLabel = null;
+
+    // --- scratch (no per-frame allocation in the hot loop) --------------------
+    this._dir = new THREE.Vector3();
+    this._up = new THREE.Vector3();
+    this._fwd = new THREE.Vector3();
+    this._right = new THREE.Vector3();
+    this._wish = new THREE.Vector3();
+    this._vTan = new THREE.Vector3();
+    this._tmp = new THREE.Vector3();
+    this._tmp2 = new THREE.Vector3();
+    this._axisX = new THREE.Vector3();
+    this._axisY = new THREE.Vector3();
+    this._axisZ = new THREE.Vector3();
+    this._q = new THREE.Quaternion();
+    this._e = new THREE.Euler();
+    this._m = new THREE.Matrix4();
+    this._lookPt = new THREE.Vector3();
+  }
+
+  async enter(params = {}) {
+    const { ctx } = this;
+    const seed = (params.seed ?? PLANET_SEED_DEFAULT) >>> 0;
+
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x01030a);
+    this.camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 4e5);
+    this.scene.add(this.camera);
+
+    // lighting: a directional sun (direction-only, survives the rebase) + fills.
+    const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
+    sun.position.copy(SUN_DIR).multiplyScalar(1e5);
+    this.scene.add(sun);
+    this.scene.add(new THREE.HemisphereLight(0x2a4a78, 0x0a0a12, 0.45));
+    this.scene.add(new THREE.AmbientLight(0x20303f, 0.35));
+    this._sun = sun;
+
+    this._buildStars();
+
+    // the real planet
+    this.planet = new PlanetSphere(this.scene, {
+      seed, radius: PLANET_RADIUS, seaLevel: PLANET_RADIUS,
+    });
+    this.planet.setSunDirection(SUN_DIR);
+    this.planet.setPlanetCenter(new THREE.Vector3(0, 0, 0));
+
+    // ship visual (camera-relative; stays near origin for precision)
+    const gs = ctx.gameState;
+    this.shipObj = buildShip(gs?.ship?.seed ?? seed, gs?.ship?.class ?? 'swift');
+    this.scene.add(this.shipObj.group);
+
+    // --- start in orbit, looking down at the round world ----------------------
+    // A sun-lit, non-polar direction reads best (terminator + colour).
+    const startDir = new THREE.Vector3(0.38, 0.26, 0.90).normalize();
+    const groundR = this.planet.heightAt(startDir);
+    this.playerUniPos.copy(startDir).multiplyScalar(groundR + PLANET_RADIUS * 2.2);
+    // nose toward planet centre, tipped a touch toward the tangent so the curved
+    // limb sits in frame; "up" = local radial so the self-leveller has nothing
+    // to fight on the very first frame.
+    this._up.copy(startDir);
+    this._tmp.set(0, 1, 0).cross(startDir).normalize();      // a horizontal tangent
+    this._fwd.copy(startDir).multiplyScalar(-0.86).addScaledVector(this._tmp, 0.14).normalize();
+    this._orientShip(this._fwd, this._up);
+    this.throttle = 0;
+    this.shipVel.set(0, 0, 0);
+
+    this._buildHint();
+    ctx.hud?.setMode('ship');
+
+    // prime one LOD pass so the first rendered frame is already a built planet
+    this.planet.update(1 / 60, this.playerUniPos);
+    this._syncShipCamera();
+  }
+
+  // ---- helpers ---------------------------------------------------------------
+
+  /** Orient this.shipQuat to look along `fwd` with `up` (both ~unit). */
+  _orientShip(fwd, up) {
+    this._axisZ.copy(fwd).negate();                           // local +Z = -forward
+    this._axisX.crossVectors(up, this._axisZ).normalize();
+    this._axisY.crossVectors(this._axisZ, this._axisX).normalize();
+    this._m.makeBasis(this._axisX, this._axisY, this._axisZ);
+    this.shipQuat.setFromRotationMatrix(this._m);
+  }
+
+  /** any unit tangent at radial `dir` (into out) — for a stable fallback heading */
+  _anyTangent(dir, out) {
+    out.set(0, 1, 0);
+    if (Math.abs(dir.y) > 0.9) out.set(1, 0, 0);
+    out.addScaledVector(dir, -out.dot(dir)).normalize();
+    return out;
+  }
+
+  /** universe altitude of the eye/craft above local terrain (AGL) */
+  get agl() {
+    return this.playerUniPos.length() - this.planet.heightAt(this.playerUniPos);
+  }
+
+  get speed() {
+    return this.mode === 'ship' ? this.shipVel.length() : this.footVel.length();
+  }
+
+  _uiOpen() { return this.ctx.ui?.anyOpen?.() ?? false; }
+
+  // ---- public transitions (also driven by the headless check) ---------------
+
+  /** Place the craft at a given AGL along the current radial (test/descent aid),
+   *  levelled into a horizon-facing pose so the descent reads correctly. */
+  placeAtAGL(agl) {
+    this._dir.copy(this.playerUniPos).normalize();
+    const groundR = this.planet.heightAt(this._dir);
+    this.playerUniPos.copy(this._dir).multiplyScalar(groundR + agl);
+    this.shipVel.set(0, 0, 0);
+    // aim the nose along the horizon (current heading flattened into the tangent)
+    this._fwd.set(0, 0, -1).applyQuaternion(this.shipQuat);
+    this._fwd.addScaledVector(this._dir, -this._fwd.dot(this._dir));
+    if (this._fwd.lengthSq() < 1e-6) this._anyTangent(this._dir, this._fwd);
+    this._orientShip(this._fwd.normalize(), this._dir);
+  }
+
+  /** Seamless ship→foot: no fade. Snap the eye to eye-height above terrain. */
+  disembark() {
+    this._dir.copy(this.playerUniPos).normalize();
+    // heading = ship forward flattened into the tangent plane
+    this._fwd.set(0, 0, -1).applyQuaternion(this.shipQuat);
+    this._fwd.addScaledVector(this._dir, -this._fwd.dot(this._dir));
+    if (this._fwd.lengthSq() < 1e-6) this._anyTangent(this._dir, this._fwd);
+    this.footFwd.copy(this._fwd).normalize();
+    this.pitch = 0;
+
+    const groundR = this.planet.heightAt(this._dir);
+    this.playerUniPos.copy(this._dir).multiplyScalar(groundR + EYE_HEIGHT);
+    this.footVel.set(0, 0, 0);
+    this.onGround = true;
+
+    this.mode = 'foot';
+    this.shipObj.group.visible = false;
+    this.ctx.hud?.setMode('foot');
+  }
+
+  /** Seamless foot→ship: re-mount and climb. */
+  takeOff() {
+    this._dir.copy(this.playerUniPos).normalize();
+    // nose = current heading tilted up toward the radial
+    this._fwd.copy(this.footFwd).addScaledVector(this._dir, 0.6).normalize();
+    this._orientShip(this._fwd, this._dir);
+    const groundR = this.planet.heightAt(this._dir);
+    const startR = groundR + Math.max(this.agl, MIN_CLEARANCE + 6);
+    this.playerUniPos.copy(this._dir).multiplyScalar(startR);
+    this.shipVel.copy(this._dir).multiplyScalar(28);   // initial climb
+    this.throttle = 0.5;
+
+    this.mode = 'ship';
+    this.shipObj.group.visible = true;
+    this.ctx.hud?.setMode('ship');
+  }
+
+  // ---- per-frame -------------------------------------------------------------
+
+  update(dt) {
+    // 1) floating-origin rebase + LOD, centred on the player's universe position
+    this.planet.update(dt, this.playerUniPos);
+
+    if (this.mode === 'ship') this._updateShip(dt);
+    else this._updateFoot(dt);
+
+    this._hud(dt);
+  }
+
+  _updateShip(dt) {
+    const enabled = !this._uiOpen();
+    this._dir.copy(this.playerUniPos).normalize();
+
+    if (enabled) {
+      // steering: mouse + arrows + A/D banked yaw (mirrors shipcontrol.js)
+      const keyYaw = (input.action('left') ? 1 : 0) - (input.action('right') ? 1 : 0);
+      const s = SHIP_SENS;
+      const tPitch = THREE.MathUtils.clamp(
+        -input.mouseDY * s * 60 - input.lookY * SHIP_PITCH * 0.75, -SHIP_PITCH, SHIP_PITCH);
+      const tYaw = THREE.MathUtils.clamp(
+        -input.mouseDX * s * 60 + (keyYaw - input.lookX) * SHIP_YAW * 0.85, -SHIP_YAW, SHIP_YAW);
+      let tRoll = 0;
+      if (input.action('rollLeft')) tRoll += SHIP_ROLL;
+      if (input.action('rollRight')) tRoll -= SHIP_ROLL;
+      tRoll += tYaw * 0.8;                        // auto-bank into turns
+
+      const t = 1 - Math.exp(-8 * dt);
+      this.shipAngVel.x += (tPitch - this.shipAngVel.x) * t;
+      this.shipAngVel.y += (tYaw - this.shipAngVel.y) * t;
+      this.shipAngVel.z += (tRoll - this.shipAngVel.z) * t;
+
+      this._e.set(this.shipAngVel.x * dt, this.shipAngVel.y * dt, this.shipAngVel.z * dt, 'XYZ');
+      this._q.setFromEuler(this._e);
+      this.shipQuat.multiply(this._q);            // local-frame rotation
+
+      if (input.action('forward')) this.throttle = Math.min(1, this.throttle + dt * 0.8);
+      if (input.action('back')) this.throttle = Math.max(0, this.throttle - dt * 1.2);
+      this.boost = input.action('boost') && this.throttle > 0.4;
+    } else {
+      this.throttle *= Math.max(0, 1 - dt * 2);
+      this.boost = false;
+    }
+
+    // gentle self-levelling: rotate "up" toward the local radial so the horizon
+    // stays sane and a disembark lands upright (world-frame correction).
+    this._up.set(0, 1, 0).applyQuaternion(this.shipQuat);
+    this._tmp.crossVectors(this._up, this._dir);
+    const sn = this._tmp.length();
+    if (sn > 1e-5) {
+      const ang = Math.atan2(sn, this._up.dot(this._dir)) * Math.min(1, SHIP_BANK_RATE * dt);
+      this._q.setFromAxisAngle(this._tmp.multiplyScalar(1 / sn), ang);
+      this.shipQuat.premultiply(this._q);
+    }
+
+    // velocity chases the nose; add strafe + gravity
+    this._fwd.set(0, 0, -1).applyQuaternion(this.shipQuat);
+    const spd = this.throttle * SHIP_MAX_SPEED * (this.boost ? SHIP_BOOST : 1);
+    this._wish.copy(this._fwd).multiplyScalar(spd);
+    if (enabled) {
+      const upAmt = (input.action('up') ? 1 : 0) - (input.action('down') ? 1 : 0);
+      if (upAmt) {
+        this._tmp.set(0, 1, 0).applyQuaternion(this.shipQuat);
+        this._wish.addScaledVector(this._tmp, upAmt * SHIP_MAX_SPEED * 0.25);
+      }
+    }
+    const vt = 1 - Math.exp(-(this.boost ? 1.6 : 2.6) * dt);
+    this.shipVel.lerp(this._wish, vt);
+    this.shipVel.addScaledVector(this._dir, -SHIP_GRAVITY * dt);   // radial gravity
+    this.playerUniPos.addScaledVector(this.shipVel, dt);
+
+    // hard floor: never pass through the terrain
+    const groundR = this.planet.heightAt(this.playerUniPos);
+    const r = this.playerUniPos.length();
+    if (r < groundR + MIN_CLEARANCE) {
+      this.playerUniPos.copy(this._dir).multiplyScalar(groundR + MIN_CLEARANCE);
+      const vr = this.shipVel.dot(this._dir);
+      if (vr < 0) this.shipVel.addScaledVector(this._dir, -vr);   // kill inward vel
+    }
+
+    this._syncShipCamera();
+
+    // seamless disembark prompt
+    this._interactLabel = null;
+    if (enabled) {
+      const agl = this.agl;
+      if (agl < LAND_MAX_AGL && this.speed < DISEMBARK_MAX_SPEED) {
+        this._interactLabel = 'F — DISEMBARK';
+        if (input.actionPressed('interact')) this.disembark();
+      } else if (agl < LAND_MAX_AGL) {
+        this._interactLabel = 'SLOW DOWN TO DISEMBARK';
+      }
+    }
+  }
+
+  _syncShipCamera() {
+    // camera pinned to the world origin (floating origin) — orientation only.
+    this.camera.position.set(0, 0, 0);
+    this.camera.quaternion.copy(this.shipQuat);
+    // ship model sits just ahead/below in camera-relative space.
+    this.shipObj.group.position.copy(SHIP_OFFSET).applyQuaternion(this.shipQuat);
+    this.shipObj.group.quaternion.copy(this.shipQuat);
+  }
+
+  _updateFoot(dt) {
+    const enabled = !this._uiOpen();
+    this._up.copy(this.playerUniPos).normalize();               // radial "up"
+
+    // look
+    if (enabled) {
+      const yawDelta = input.mouseDX * LOOK_SENS + input.lookX * 2.1 * dt;
+      this._q.setFromAxisAngle(this._up, -yawDelta);
+      this.footFwd.applyQuaternion(this._q);
+      this.pitch -= input.mouseDY * LOOK_SENS + input.lookY * 1.6 * dt;
+      this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch));
+    }
+
+    // re-project heading into the current tangent plane (sphere is round: the
+    // tangent basis turns under you as you walk), then build a right vector.
+    this.footFwd.addScaledVector(this._up, -this.footFwd.dot(this._up));
+    if (this.footFwd.lengthSq() < 1e-8) this._anyTangent(this._up, this.footFwd);
+    this.footFwd.normalize();
+    this._right.crossVectors(this.footFwd, this._up).normalize();
+
+    // wish direction from WASD, in the tangent plane
+    let fx = 0, fz = 0;
+    if (enabled) {
+      if (input.action('forward')) fz += 1;
+      if (input.action('back')) fz -= 1;
+      if (input.action('right')) fx += 1;
+      if (input.action('left')) fx -= 1;
+    }
+    this._wish.set(0, 0, 0)
+      .addScaledVector(this.footFwd, fz)
+      .addScaledVector(this._right, fx);
+    const wl = this._wish.length();
+    if (wl > 1e-4) this._wish.multiplyScalar(1 / wl);
+
+    const sprinting = enabled && input.action('sprint') && fz > 0;
+    const targetSpeed = (wl > 1e-4 ? WALK_SPEED : 0) * (sprinting ? SPRINT_MULT : 1);
+
+    // decompose velocity into radial + tangential relative to the CURRENT up
+    let vRad = this.footVel.dot(this._up);
+    this._vTan.copy(this.footVel).addScaledVector(this._up, -vRad);
+
+    if (this.onGround) {
+      const t = 1 - Math.exp(-8.5 * dt);
+      this._tmp.copy(this._wish).multiplyScalar(targetSpeed);   // target tangential vel
+      this._vTan.lerp(this._tmp, t);
+      if (enabled && input.actionPressed('jump')) { vRad = JUMP_SPEED; this.onGround = false; }
+    } else {
+      this._vTan.addScaledVector(this._wish, targetSpeed * AIR_CONTROL * dt * 6);
+    }
+    vRad -= FOOT_GRAVITY * dt;                                   // radial gravity
+    this.footVel.copy(this._vTan).addScaledVector(this._up, vRad);
+
+    this.playerUniPos.addScaledVector(this.footVel, dt);
+
+    // glue to the surface: re-project the eye to heightAt(dir)+EYE each frame
+    this._dir.copy(this.playerUniPos).normalize();
+    const groundR = this.planet.heightAt(this._dir);
+    const targetR = groundR + EYE_HEIGHT;
+    const curR = this.playerUniPos.length();
+    if (curR <= targetR + 1e-4) {
+      this.playerUniPos.copy(this._dir).multiplyScalar(targetR);
+      const vr = this.footVel.dot(this._dir);
+      if (vr < 0) this.footVel.addScaledVector(this._dir, -vr);  // stop falling
+      this.onGround = true;
+    } else if (curR > targetR + 0.05) {
+      this.onGround = false;
+    }
+
+    // camera: at origin, up = radial, look along heading pitched by this.pitch.
+    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+    this._lookPt.copy(this.footFwd).multiplyScalar(cp).addScaledVector(this._up, sp);
+    this.camera.position.set(0, 0, 0);
+    this.camera.up.copy(this._up);
+    this.camera.lookAt(this._lookPt);
+
+    // take-off prompt
+    this._interactLabel = 'G — TAKE OFF';
+    if (enabled && input.actionPressed('land')) this.takeOff();
+  }
+
+  _hud(dt) {
+    const { ctx } = this;
+    const gs = ctx.gameState;
+    const inShip = this.mode === 'ship';
+    // heading around the local up for the compass strip
+    const headDeg = THREE.MathUtils.radToDeg(Math.atan2(this.footFwd.x, this.footFwd.z));
+    ctx.hud?.update(dt, {
+      health: gs ? gs.health / gs.healthMax : 1,
+      shield: gs ? gs.shield / gs.shieldMax : 1,
+      hull: gs ? gs.ship.hull / gs.ship.hullMax : 1,
+      oxygen: gs ? gs.oxygen / gs.oxygenMax : 1,
+      energy: gs ? gs.energy / gs.energyMax : 1,
+      jetpack: 1,
+      lumens: gs?.lumens ?? 0,
+      speed: Math.round(inShip ? this.speed : this.speed * 3.6),
+      altitude: Math.round(this.agl),
+      fuel: gs?.ship?.fuel ?? 1,
+      hazardIcons: [],
+      compassDeg: headDeg,
+      reticle: inShip ? 'ship' : (this._interactLabel ? 'interact' : 'dot'),
+      interactLabel: this._interactLabel,
+      locationLine: `SEAMLESS WORLD · ${inShip ? 'FLIGHT' : 'ON FOOT'}`,
+    });
+  }
+
+  // ---- scene bits ------------------------------------------------------------
+
+  _buildStars() {
+    const N = 1600, p = new Float32Array(N * 3);
+    let s = 987654321 >>> 0;
+    const rnd = () => ((s = (Math.imul(s ^ (s >>> 15), 0x2c1b3c6d)) >>> 0) / 4294967296);
+    for (let i = 0; i < N; i++) {
+      const u = rnd() * 2 - 1, a = rnd() * Math.PI * 2, r = 1.2e5;
+      const sr = Math.sqrt(1 - u * u);
+      p[i * 3] = Math.cos(a) * sr * r; p[i * 3 + 1] = u * r; p[i * 3 + 2] = Math.sin(a) * sr * r;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    const m = new THREE.PointsMaterial({ color: 0xffffff, size: 260, sizeAttenuation: true });
+    this.stars = new THREE.Points(g, m);
+    this.stars.frustumCulled = false;      // it's centred on the camera (origin)
+    this.scene.add(this.stars);
+  }
+
+  _buildHint() {
+    const el = document.createElement('div');
+    el.style.cssText = [
+      'position:absolute', 'left:50%', 'top:12px', 'transform:translateX(-50%)',
+      'padding:6px 16px', 'font:11px/1.5 var(--ui-font,system-ui)',
+      'letter-spacing:.14em', 'color:#7de8ff', 'background:rgba(8,20,28,.6)',
+      'border:1px solid rgba(125,232,255,.35)', 'pointer-events:none', 'z-index:20',
+      'text-align:center',
+    ].join(';');
+    el.innerHTML = 'SEAMLESS PLANET · W throttle · mouse steer · Q/E roll · '
+      + '<b>F</b> disembark near ground · <b>G</b> take off · Space jump';
+    document.getElementById('ui-root').appendChild(el);
+    this._hintEl = el;
+  }
+
+  exit() {
+    this._hintEl?.remove();
+    this.ctx.hud?.setMode('hidden');
+    this.planet?.dispose();
+    this.shipObj?.dispose?.();
+    if (this.stars) { this.stars.geometry.dispose(); this.stars.material.dispose(); }
+    this.scene = null;
+  }
+}
