@@ -8,6 +8,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { createAOPass, disposeAOPass } from '../render/postao.js';
 
 // Final-image grade: operates on the tone-mapped, sRGB LDR frame (after
 // OutputPass), so contrast/saturation/vignette are all display-safe. Grain is
@@ -73,6 +74,7 @@ export class Engine {
     this.composer = null;
     this.bloomPass = null;
     this.gradePass = null;
+    this.aoPass = null;
     this._time = 0;
 
     this.clock = new THREE.Clock();
@@ -82,8 +84,9 @@ export class Engine {
   /** Point the pipeline at a scene+camera (rebuilds the composer). */
   setScene(scene, camera, {
     bloomStrength = 0.55, bloomRadius = 0.6, bloomThreshold = 0.85,
-    grade = {},
+    grade = {}, aoScene = 'surface', aoEnabled = true,
   } = {}) {
+    disposeAOPass(this.aoPass); this.aoPass = null;
     this._scene = scene;
     this._camera = camera;
     const size = new THREE.Vector2();
@@ -100,6 +103,9 @@ export class Engine {
     this.composer.setPixelRatio(this.renderer.getPixelRatio());
     this.composer.setSize(size.x, size.y);
     this.composer.addPass(new RenderPass(scene, camera));
+    // ambient occlusion / contact shadows — grounds geometry before it can bloom
+    this.aoPass = createAOPass(scene, camera, size, { scene: aoScene, enabled: aoEnabled, renderer: this.renderer });
+    if (this.aoPass) this.composer.addPass(this.aoPass);
     this.bloomPass = new UnrealBloomPass(size, bloomStrength, bloomRadius, bloomThreshold);
     this.composer.addPass(this.bloomPass);
     this.composer.addPass(new OutputPass());

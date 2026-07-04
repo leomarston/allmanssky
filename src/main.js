@@ -171,7 +171,11 @@ class Game {
       : name === 'hangar'
         ? { bloomStrength: 0.55, bloomRadius: 0.58, bloomThreshold: 0.84 }
         : { bloomStrength: 0.4, bloomRadius: 0.5, bloomThreshold: 0.85 };
-    this.engine.setScene(next.scene, next.camera, bloom);
+    // AO is verified clean in the interior (small depth range); the outdoor and
+    // space scenes use logarithmicDepthBuffer over a huge range, which GTAO's
+    // depth prepass mishandles (horizon artifacts) — gated off pending a
+    // log-depth-aware surface AO. See task: surface AO.
+    this.engine.setScene(next.scene, next.camera, { ...bloom, aoScene: name, aoEnabled: name === 'hangar' });
     events.emit('state:change', name, old?.name);
   }
 
