@@ -35,6 +35,7 @@ import { PlanetScatter } from '../render/planetscatter.js';
 import { PlanetFauna } from '../render/planetfauna.js';
 import { PlanetResources } from '../render/planetresources.js';
 import { EffectsSystem } from '../render/effects.js';
+import { createSkyEnvironment } from '../render/environment.js';
 import { itemColor, ITEMS } from '../gameplay/items.js';
 import { events } from '../core/events.js';
 import { audio } from '../audio/audio.js';
@@ -120,13 +121,34 @@ export class PlanetState {
     this.camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 4e5);
     this.scene.add(this.camera);
 
-    // lighting: a directional sun (direction-only, survives the rebase) + fills.
-    const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
+    // lighting: a warm directional key (direction-only, survives the rebase) + a
+    // low hemispheric bounce. The heavy lifting is the sky IBL below — the old
+    // flat blue AmbientLight is GONE because scene.environment now supplies real
+    // hemispheric irradiance, so shadow-side faces read as lit mineral instead
+    // of crushing to a dead blue near-black.
+    const sun = new THREE.DirectionalLight(0xffe6c2, 3.2);   // warm golden key
     sun.position.copy(SUN_DIR).multiplyScalar(1e5);
     this.scene.add(sun);
-    this.scene.add(new THREE.HemisphereLight(0x2a4a78, 0x0a0a12, 0.45));
-    this.scene.add(new THREE.AmbientLight(0x20303f, 0.35));
+    this.scene.add(new THREE.HemisphereLight(0x9fb4d6, 0x5a4a34, 0.22)); // low warm bounce
     this._sun = sun;
+
+    // image-based lighting: a PMREM environment baked ONCE from a procedural sky
+    // (zenith→horizon gradient + sun disc + ground bounce). SUN_DIR is static so
+    // fromScene runs a single time. This is the single biggest "flat three.js →
+    // real PBR" cue — it rescues every MeshStandardMaterial's shadow faces and
+    // gives the sea/crystals real specular. intensity ~1.15 keeps bright horizon
+    // reflections under the bloom threshold.
+    this.env = createSkyEnvironment(ctx.engine.renderer, {
+      zenith: '#3d6ea8', horizon: '#bcd0e0', ground: '#6b5a44',
+      sunDir: SUN_DIR, sunColor: '#fff2d8', sunIntensity: 3.0, haze: 0.35,
+    });
+    this.env.apply(this.scene, 1.15);
+
+    // aerial perspective: exponential fog tinted to the sky horizon, altitude-
+    // gated per-frame in update() (so orbit stays crisp but distant ground melts
+    // into the sky). A small exposure lift warms the whole frame.
+    this.scene.fog = new THREE.FogExp2(0xbcd0e0, 0.0);
+    ctx.engine.setExposure(1.1);
 
     this._buildStars();
 
@@ -281,6 +303,24 @@ export class PlanetState {
     this.fauna?.update(dt, this.playerUniPos, this._sUp);
     this.resources?.update(dt, this.playerUniPos, this._sUp);
     this.effects?.update(dt);
+
+    // aerial perspective: gate fog by altitude (orbit stays crisp; near the
+    // ground distant terrain dissolves into the sky) and tint it to the sky
+    // horizon at the current sun elevation — the SAME palette the atmosphere
+    // shell uses, so the terrain→sky seam stays invisible.
+    const fog = this.scene.fog;
+    if (fog) {
+      const nearGround = Math.max(0, Math.min(1, 1 - this.agl / 1800));
+      fog.density = nearGround * 0.00042;
+      const sunUp = SUN_DIR.dot(this._sUp);
+      const day = Math.max(0, Math.min(1, (sunUp + 0.25) / 0.37));
+      const w = (1 - day) * 0.7, bright = 0.15 + 0.85 * day;
+      fog.color.setRGB(
+        (0.52 + (0.95 - 0.52) * w) * bright,
+        (0.66 + (0.50 - 0.66) * w) * bright,
+        (0.85 + (0.30 - 0.85) * w) * bright,
+      );
+    }
 
     this._hud(dt);
   }
@@ -571,6 +611,8 @@ export class PlanetState {
     this.fauna?.dispose();
     this.scatter?.dispose();
     this.planet?.dispose();
+    this.env?.dispose();
+    this.ctx.engine.setExposure(1.0);          // restore global exposure on leave
     this.shipObj?.dispose?.();
     if (this.stars) { this.stars.geometry.dispose(); this.stars.material.dispose(); }
     this.scene = null;
