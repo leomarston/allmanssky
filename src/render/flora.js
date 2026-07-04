@@ -12,7 +12,7 @@ const CELL = 64;          // metres — must match TerrainField cell grid
 const VIEW_CELLS = 5;     // stream radius in cells (~320 m)
 const GRASS_RADIUS = 84;  // metres — grass only near the player
 const ARCH_CAP = 3000;    // max instances per archetype
-const GRASS_CAP = 5200;
+const GRASS_CAP = 11000;
 const MAX_PER_CELL = 14;  // archetype instances at density 1, moisture 1
 
 // ------------------------------------------------------------- color helpers
@@ -167,15 +167,28 @@ function buildArchetypes(def, kit, rng) {
   });
 
   const canopyTree = (r, hMul, cA, cB) => { // r = forked RNG
-
     const h = r.range(3.6, 5.6) * hMul;
     const t = trunk(r, h, r.range(0.24, 0.34), r.range(0.05, 0.22), trkC, trkD);
     const parts = [t.geo];
-    const nBlob = r.int(2, 3);
+    // branches angling up from the upper trunk toward the canopy — breaks the
+    // "lollipop" silhouette that reads as low-poly
+    const nBr = r.int(3, 5);
+    for (let i = 0; i < nBr; i++) {
+      const a = (i / nBr) * Math.PI * 2 + r.range(-0.4, 0.4);
+      const bl = r.range(0.8, 1.5) * hMul;
+      const g = cone(r.range(0.04, 0.08), bl, 4);
+      xf(g, 0, bl / 2, 0);
+      xf(g, 0, 0, 0, r.range(0.7, 1.15), 0, 0);              // tilt outward
+      xf(g, t.tipX * 0.5, h * r.range(0.55, 0.8), t.tipZ * 0.5, 0, a, 0);
+      parts.push(paint(g, trkD, trkC));
+    }
+    // fuller canopy: many smaller, layered leaf clusters instead of 2-3 lumps
+    const nBlob = r.int(5, 8);
     for (let i = 0; i < nBlob; i++) {
-      const br = r.range(1.2, 2.0) * hMul;
-      const b = blob(r, br, r.range(0.62, 0.8), cB, cA);
-      xf(b, t.tipX + r.range(-0.9, 0.9), h - br * 0.25 + r.range(-0.5, 0.6), t.tipZ + r.range(-0.9, 0.9));
+      const br = r.range(0.8, 1.5) * hMul;
+      const b = blob(r, br, r.range(0.66, 0.86), cB, cA);
+      const a = r.range(0, Math.PI * 2), rad = r.range(0, 1.1) * hMul;
+      xf(b, t.tipX + Math.cos(a) * rad, h - br * 0.15 + r.range(-0.6, 0.9), t.tipZ + Math.sin(a) * rad);
       parts.push(b);
     }
     return merge(parts);
@@ -399,9 +412,9 @@ function buildArchetypes(def, kit, rng) {
 function grassProfile(biome, kit) {
   const leaf = mix(col(NATURE.leaf), kit.accent, 0.5);
   switch (biome) {
-    case 'lush': return { perCell: 64, cA: mix(leaf, kit.low, 0.3), cB: mix(col(NATURE.dry), kit.accent, 0.35), h: 1 };
-    case 'swamp': return { perCell: 46, cA: mix(kit.low, leaf, 0.5), cB: mix(kit.accent, col(NATURE.leafDark), 0.5), h: 1.15 };
-    case 'ocean': return { perCell: 40, cA: mix(leaf, kit.shore, 0.3), cB: mix(col(NATURE.dry), kit.accent, 0.5), h: 0.9 };
+    case 'lush': return { perCell: 165, cA: mix(leaf, kit.low, 0.3), cB: mix(col(NATURE.dry), kit.accent, 0.35), h: 1 };
+    case 'swamp': return { perCell: 120, cA: mix(kit.low, leaf, 0.5), cB: mix(kit.accent, col(NATURE.leafDark), 0.5), h: 1.15 };
+    case 'ocean': return { perCell: 95, cA: mix(leaf, kit.shore, 0.3), cB: mix(col(NATURE.dry), kit.accent, 0.5), h: 0.9 };
     case 'desert': return { perCell: 14, cA: mix(col(NATURE.dryDark), kit.shore, 0.4), cB: col(NATURE.dry), h: 0.7 };
     case 'frozen': return { perCell: 12, cA: mix(col(NATURE.bone), kit.high, 0.5), cB: mix(col(NATURE.snow), kit.high, 0.4), h: 0.6 };
     case 'toxic': return { perCell: 28, cA: mix(kit.low, col(NATURE.sick), 0.4), cB: mix(kit.accent, col(NATURE.sick), 0.5), h: 0.9 };
