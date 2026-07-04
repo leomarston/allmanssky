@@ -216,6 +216,9 @@ export class PlanetSphere {
     this.contNoise = new SimplexNoise(seed);
     this.mtnNoise = new SimplexNoise(hash32(seed, 0x4d) >>> 0);
     this.detNoise = new SimplexNoise(hash32(seed, 0x9a) >>> 0);
+    // large-scale moisture field: drives lush-vs-arid grass and soil patches so
+    // the biome reads as varied terrain rather than one flat green.
+    this.bioNoise = new SimplexNoise(hash32(seed, 0x7c) >>> 0);
 
     this.planetCenter = new THREE.Vector3(0, 0, 0);
     this._camLocal = new THREE.Vector3();
@@ -275,9 +278,10 @@ export class PlanetSphere {
     return this._surfaceRadius(dir.x / l, dir.y / l, dir.z / l);
   }
 
-  // Biome colour by altitude-above-sea and latitude, written into (out*) as
-  // LINEAR rgb (THREE.Color.setHex converts from sRGB for us).
-  _biomeColor(r, nx, ny, nz, col) {
+  // Biome colour by altitude-above-sea, latitude, macro-moisture and SLOPE,
+  // written into (out*) as LINEAR rgb (THREE.Color.setHex converts from sRGB).
+  // Slope (0 flat .. 1 vertical) lets cliffs show bare rock — the NMS read.
+  _biomeColor(r, nx, ny, nz, slope, col) {
     const alt = r - this.seaLevel;
     const lat = Math.abs(ny);            // pole axis = y
     if (alt < 0) {
@@ -286,16 +290,25 @@ export class PlanetSphere {
       col.setHex(0x2a6f97).lerp(SCRATCH_COL.setHex(0x05213a), t);
       return col;
     }
-    // Land ramp. Snow line drops toward the poles.
-    const snowStart = 155 * (1 - lat * 0.7);
-    col.setHex(0xcdb98f); // beach sand baseline
-    // beach -> grass
-    col.lerp(SCRATCH_COL.setHex(0x4f7a3a), smoothstep(3, 26, alt));
-    // grass -> rock
-    col.lerp(SCRATCH_COL.setHex(0x6d5f4d), smoothstep(60, snowStart * 0.72, alt));
-    // rock -> snow
+    // macro moisture (large patches): lush grass where wet, arid where dry.
+    const moist = 0.5 + 0.5 * this.bioNoise.fbm3(nx * 1.9 + 5.1, ny * 1.9 + 2.3, nz * 1.9 + 8.8, 4);
+    const dry = 1 - moist;
+    const snowStart = 150 * (1 - lat * 0.7);
+    // shoreline: wet sand -> dry beach across the first few metres.
+    col.setHex(0x8a7a55).lerp(SCRATCH_COL.setHex(0xcdb98f), smoothstep(0, 4, alt));
+    // beach -> grass (moisture picks lush vs. arid olive).
+    const grass = SCRATCH_COL3.setHex(0x4f7a3a).lerp(SCRATCH_COL.setHex(0x8a8a46), dry);
+    col.lerp(grass, smoothstep(3, 22, alt));
+    // drier mid-altitude ground shows exposed soil.
+    col.lerp(SCRATCH_COL.setHex(0x6b5334), smoothstep(40, 80, alt) * (0.3 + 0.5 * dry));
+    // -> altitude rock as it climbs toward the peaks.
+    col.lerp(SCRATCH_COL.setHex(0x6d5f4d), smoothstep(70, snowStart * 0.85, alt));
+    // steep faces below the snow line read as bare cliff rock.
+    const belowSnow = 1 - smoothstep(snowStart, snowStart + 30, alt);
+    col.lerp(SCRATCH_COL.setHex(0x5a5048), smoothstep(0.34, 0.62, slope) * belowSnow);
+    // rock -> snow above the snow line.
     col.lerp(SCRATCH_COL.setHex(0xf2f5fb), smoothstep(snowStart, snowStart + 55, alt));
-    // extra polar whitening regardless of altitude
+    // extra polar whitening regardless of altitude.
     col.lerp(SCRATCH_COL.setHex(0xf2f5fb), smoothstep(0.80, 0.96, lat) * 0.85);
     return col;
   }
@@ -316,6 +329,7 @@ export class PlanetSphere {
     const colArr = new Float32Array(nVerts * 3);
     const surf = new Float32Array(nVerts * 3);   // true surface pos (for normals)
     const dirs = new Float32Array(nVerts * 3);   // unit sphere dir (for outward test)
+    const rCs = new Float32Array(nVerts);        // floor-clamped radius per vertex
 
     const f = FACES[chunk.faceIdx];
     const cu = chunk.cu, cv = chunk.cv, half = chunk.half;
@@ -363,9 +377,7 @@ export class PlanetSphere {
           pos[k * 3] = surf[k * 3]; pos[k * 3 + 1] = surf[k * 3 + 1]; pos[k * 3 + 2] = surf[k * 3 + 2];
         }
         dirs[k * 3] = dx; dirs[k * 3 + 1] = dy; dirs[k * 3 + 2] = dz;
-
-        this._biomeColor(rC, dx, dy, dz, col);
-        colArr[k * 3] = col.r; colArr[k * 3 + 1] = col.g; colArr[k * 3 + 2] = col.b;
+        rCs[k] = rC;      // stash; biome colour runs after normals (needs slope)
       }
     }
 
@@ -388,6 +400,16 @@ export class PlanetSphere {
         if (nx * dirs[k * 3] + ny * dirs[k * 3 + 1] + nz * dirs[k * 3 + 2] < 0) { nx = -nx; ny = -ny; nz = -nz; }
         nrm[k * 3] = nx; nrm[k * 3 + 1] = ny; nrm[k * 3 + 2] = nz;
       }
+    }
+
+    // Third pass: biome colour. Runs AFTER normals because it needs slope =
+    // 1 - dot(surfaceNormal, radialDir) so cliffs can read as bare rock.
+    for (let k = 0; k < nVerts; k++) {
+      const dx = dirs[k * 3], dy = dirs[k * 3 + 1], dz = dirs[k * 3 + 2];
+      let dot = nrm[k * 3] * dx + nrm[k * 3 + 1] * dy + nrm[k * 3 + 2] * dz;
+      dot = dot < 0 ? 0 : dot > 1 ? 1 : dot;
+      this._biomeColor(rCs[k], dx, dy, dz, 1 - dot, col);
+      colArr[k * 3] = col.r; colArr[k * 3 + 1] = col.g; colArr[k * 3 + 2] = col.b;
     }
 
     // Indices — CCW-outward winding (front faces).
@@ -438,10 +460,15 @@ export class PlanetSphere {
     const muMax = Math.sqrt(Math.max(1 - ratio * ratio, 1e-4));
     this.atmoMat = new THREE.ShaderMaterial({
       uniforms: {
-        uColor: { value: new THREE.Color(0x5aa2ff) },
+        uColor: { value: new THREE.Color(0x5aa2ff) },       // limb tint
         uSunDir: { value: new THREE.Vector3(1, 0, 0) },
+        uSunColor: { value: new THREE.Color(0xfff2d8) },
+        uZenith: { value: new THREE.Color(0.10, 0.26, 0.62) },
+        uHorizon: { value: new THREE.Color(0.52, 0.66, 0.85) },  // matches the fog palette
         uMuMax: { value: muMax },
         uStrength: { value: 1.35 },
+        uUp: { value: new THREE.Vector3(0, 1, 0) },         // radial up at the player
+        uGroundAmt: { value: 0 },                            // 1 at surface -> 0 in orbit
       },
       vertexShader: /* glsl */`
         #include <common>
@@ -460,14 +487,21 @@ export class PlanetSphere {
         #include <logdepthbuf_pars_fragment>
         uniform vec3 uColor;
         uniform vec3 uSunDir;
+        uniform vec3 uSunColor;
+        uniform vec3 uZenith;
+        uniform vec3 uHorizon;
         uniform float uMuMax;
         uniform float uStrength;
+        uniform vec3 uUp;
+        uniform float uGroundAmt;
         varying vec3 vNormalW;
         varying vec3 vWorldPos;
         void main() {
           #include <logdepthbuf_fragment>
-          vec3 V = normalize(cameraPosition - vWorldPos);
+          vec3 V = normalize(cameraPosition - vWorldPos);   // fragment -> camera
           vec3 N = normalize(vNormalW);
+
+          // ---- orbital limb (UNCHANGED grazing-airmass glow, proven look) ----
           float mu = clamp(-dot(V, N) / uMuMax, 0.0, 1.0);
           float glow = pow(mu, 1.8) * 0.75 + pow(mu, 7.0) * 0.55 + mu * 0.07;
           vec3 rim = N - V * dot(N, V);
@@ -475,7 +509,27 @@ export class PlanetSphere {
           float day = pow(clamp(sunSide * 0.62 + 0.45, 0.0, 1.0), 1.6);
           day = max(day, 0.03);
           float glare = pow(clamp(dot(-V, uSunDir), 0.0, 1.0), 6.0) * 0.6 * mu;
-          vec3 c = uColor * (glow * day * uStrength) + uColor * glare;
+          vec3 limb = uColor * (glow * day * uStrength) + uColor * glare;
+
+          // ---- ground sky dome (only when inside the atmosphere) ----
+          // viewDir = camera -> fragment = the sky direction the player looks along.
+          vec3 viewDir = -V;
+          float elev = clamp(dot(viewDir, uUp), -1.0, 1.0);
+          float sunUp = dot(uSunDir, uUp);
+          float sd = max(dot(viewDir, uSunDir), 0.0);
+          float dayMaster = smoothstep(-0.28, 0.10, sunUp);   // night side stays dark
+          // Rayleigh-ish vertical gradient horizon -> zenith.
+          vec3 sky = mix(uHorizon, uZenith, pow(clamp(elev, 0.0, 1.0), 0.55));
+          // warm sunset band low on the horizon when the sun is low.
+          float horizonBand = pow(1.0 - abs(elev), 3.0);
+          sky = mix(sky, vec3(1.0, 0.52, 0.26), horizonBand * smoothstep(0.30, -0.12, sunUp) * 0.6);
+          // Mie forward halo + a crisp sun disc (emissive > 1 blooms for free).
+          float halo = pow(sd, 8.0) * 0.5 + pow(sd, 90.0) * 2.2;
+          float disc = smoothstep(0.9992, 0.9997, sd) * 8.0;
+          vec3 ground = (sky + uSunColor * (halo + disc)) * dayMaster;
+
+          // blend: full dome on the surface, thin limb from orbit.
+          vec3 c = limb * (1.0 - uGroundAmt * 0.5) + ground * uGroundAmt;
           gl_FragColor = vec4(c, 1.0);
         }`,
       side: THREE.BackSide,
@@ -511,6 +565,15 @@ export class PlanetSphere {
     // Camera position in planet-local space drives LOD.
     this._camLocal.copy(cameraWorldPos).sub(this.planetCenter);
     for (let i = 0; i < 6; i++) this.faces[i].update(this._camLocal);
+
+    // Feed the atmosphere shell the player's radial up + a ground/orbit blend so
+    // one shader serves both the ground sky dome and the orbital limb. uUp must
+    // be the player radial (NOT cameraPosition, which is pinned at the origin).
+    const rLen = this._camLocal.length();
+    if (rLen > 1e-3) this.atmoMat.uniforms.uUp.value.copy(this._camLocal).multiplyScalar(1 / rLen);
+    const agl = rLen - this.radius;
+    const g = 1 - agl / (this.radius * 0.5);
+    this.atmoMat.uniforms.uGroundAmt.value = g < 0 ? 0 : g > 1 ? 1 : g;
   }
 
   /** { leaves, triangles, builds } — walks the tree; call sparingly. */
@@ -537,3 +600,4 @@ export class PlanetSphere {
 // Scratch colours reused inside the hot build loop (no per-vertex allocation).
 const SCRATCH_COL = new THREE.Color();
 const SCRATCH_COL2 = new THREE.Color();
+const SCRATCH_COL3 = new THREE.Color();
