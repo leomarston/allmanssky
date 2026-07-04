@@ -206,7 +206,7 @@ export class TerrainRenderer {
     this._detailTex = makeDetailTexture(seed);
     this.material.onBeforeCompile = (shader) => {
       shader.uniforms.uDetail = { value: this._detailTex };
-      shader.uniforms.uBumpAmt = { value: 1.25 };
+      shader.uniforms.uBumpAmt = { value: 1.7 };
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vAmsWorld;')
         .replace('#include <begin_vertex>',
@@ -235,17 +235,29 @@ export class TerrainRenderer {
         ].join('\n'))
         .replace('#include <normal_fragment_begin>', [
           '#include <normal_fragment_begin>',
-          'float amsFade = 1.0 - smoothstep(28.0, 185.0, length(vAmsWorld - cameraPosition));',
-          'if (amsFade > 0.001) {',
-          '  float e = 0.6;',
+          '{',
           '  vec2 w = vAmsWorld.xz;',
-          '  float hl = amsDetailH(w - vec2(e,0.0)); float hr = amsDetailH(w + vec2(e,0.0));',
-          '  float hd = amsDetailH(w - vec2(0.0,e)); float hu = amsDetailH(w + vec2(0.0,e));',
-          '  vec3 wMicro = normalize(vec3((hl-hr)*uBumpAmt, 1.0, (hd-hu)*uBumpAmt));',
+          '  float dCam2 = length(vAmsWorld - cameraPosition);',
           '  mat3 amsV = mat3(viewMatrix);',            // world→view rotation (terrain mesh is unrotated)
           '  vec3 vUp = normalize(amsV * vec3(0.0,1.0,0.0));',
-          '  vec3 vMicro = normalize(amsV * wMicro);',
-          '  normal = normalize(normal + (vMicro - vUp) * amsFade);',
+          // fine micro-relief (near) — grain the eye reads underfoot
+          '  float microFade = 1.0 - smoothstep(28.0, 185.0, dCam2);',
+          '  if (microFade > 0.001) {',
+          '    float e = 0.6;',
+          '    float hl = amsDetailH(w - vec2(e,0.0)); float hr = amsDetailH(w + vec2(e,0.0));',
+          '    float hd = amsDetailH(w - vec2(0.0,e)); float hu = amsDetailH(w + vec2(0.0,e));',
+          '    vec3 wMicro = normalize(vec3((hl-hr)*uBumpAmt, 1.0, (hd-hu)*uBumpAmt));',
+          '    normal = normalize(normal + (normalize(amsV*wMicro) - vUp) * microFade);',
+          '  }',
+          // meso undulation (broader, reads farther out) — soil/sand/rock relief
+          '  float mesoFade = 1.0 - smoothstep(90.0, 520.0, dCam2);',
+          '  if (mesoFade > 0.001) {',
+          '    float e2 = 4.5;',
+          '    float ml = texture2D(uDetail, (w-vec2(e2,0.0))*0.031).g; float mr = texture2D(uDetail, (w+vec2(e2,0.0))*0.031).g;',
+          '    float md = texture2D(uDetail, (w-vec2(0.0,e2))*0.031).g; float mu = texture2D(uDetail, (w+vec2(0.0,e2))*0.031).g;',
+          '    vec3 wMeso = normalize(vec3((ml-mr)*uBumpAmt*0.6, 1.0, (md-mu)*uBumpAmt*0.6));',
+          '    normal = normalize(normal + (normalize(amsV*wMeso) - vUp) * mesoFade * 0.5);',
+          '  }',
           '}',
         ].join('\n'));
     };

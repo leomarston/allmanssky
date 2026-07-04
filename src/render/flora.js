@@ -209,8 +209,9 @@ function buildArchetypes(def, kit, rng) {
       add('canopyA', canopyTree(rng.fork('cA'), 1.0, leaf, leafD), { weight: 3, sMin: 0.9, sMax: 1.6 });
       add('canopyB', canopyTree(rng.fork('cB'), 1.28, mix(leaf, kit.accent, 0.4), leafD), { weight: 2, sMin: 0.9, sMax: 1.5 });
       const fr = rng.fork('fern');
-      add('fern', merge(fronds(fr, fr.int(6, 8), 1.5, 0.3, 1.05, 0.1, leafD, mix(leaf, kit.accent, 0.55))),
-        { weight: 3, collect: 'carbyne', sMin: 0.6, sMax: 1.2 });
+      // low, spread, bright fronds — a ground fern, not a black spike cluster
+      add('fern', merge(fronds(fr, fr.int(8, 11), 0.9, 0.4, 0.5, 0.08, mix(leaf, kit.low, 0.25), mix(leaf, kit.accent, 0.7), 0.2)),
+        { weight: 2, collect: 'carbyne', sMin: 0.55, sMax: 0.95 });
       const bu = rng.fork('bush');
       add('bush', paint(xf(jitter(ico(0.9, 1), bu, 0.16), 0, 0.55, 0, 0, 0, 0, [1, 0.75, 1]), leafD, leaf), { weight: 2, sMin: 0.7, sMax: 1.4 });
       break;
