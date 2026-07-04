@@ -34,6 +34,8 @@ import { createCockpit } from '../render/cockpit.js';
 import { createArcforge } from '../render/arcforge.js';
 import { UnderwaterSystem } from '../render/underwater.js';
 import { createSkyEnvironment } from '../render/environment.js';
+import { updateGodraySun } from '../render/godrays.js';
+import { SkyClouds } from '../render/skyclouds.js';
 import { audio } from '../audio/audio.js';
 
 const BOARD_RANGE = 6;
@@ -82,6 +84,7 @@ export class SurfaceState {
       haze: atmo.density ?? 0.3,
     });
     this.env.apply(this.scene, 1.0);
+    this.skyClouds = new SkyClouds(this.scene, this.def);
     this.terrain = new TerrainRenderer(this.scene, this.def, this.field);
     this.flora = new FloraSystem(this.scene, this.def, this.field);
     this.creatures = new CreatureSystem(this.scene, this.def, this.field);
@@ -263,6 +266,14 @@ export class SurfaceState {
     // refresh IBL as the sun tracks (regenerates only on ~10° drift; sun fades at night)
     const day = Math.max(0, Math.min(1, (sunElev + 0.1) / 0.3));
     this.env?.update({ sunDir: this.sky.sunDir, sunIntensity: 0.15 + 3.0 * day });
+    this.skyClouds?.update(dt, this.camera.position, this.sky.sunDir, day);
+    // feed the sun to the crepuscular-rays pass (glows just under the horizon too)
+    const gp = this.ctx.engine.godrayPass;
+    if (gp) {
+      const sunWorldPos = this.sky.sunDir.clone().multiplyScalar(1000).add(this.camera.position);
+      if (gp.uniforms?.uTint && this.sky.light) gp.uniforms.uTint.value.copy(this.sky.light.color);
+      updateGodraySun(gp, sunWorldPos, this.camera, sunElev > -0.05);
+    }
     this.skyBodies.update(dt, this.camera.position, sunElev, this.timeOfDay);
     // thin the fog with altitude so the ground reads from the air
     if (this.scene.fog && this.mode !== 'foot') {
@@ -620,6 +631,7 @@ export class SurfaceState {
     this.weather?.dispose?.();
     this.sky?.dispose?.();
     this.env?.dispose?.();
+    this.skyClouds?.dispose?.();
     this.scene.environment = null;
     this.flora?.dispose?.();
     this.creatures?.dispose?.();

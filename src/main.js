@@ -175,7 +175,9 @@ class Game {
     // space scenes use logarithmicDepthBuffer over a huge range, which GTAO's
     // depth prepass mishandles (horizon artifacts) — gated off pending a
     // log-depth-aware surface AO. See task: surface AO.
-    this.engine.setScene(next.scene, next.camera, { ...bloom, aoScene: name, aoEnabled: name === 'hangar' });
+    this.engine.setScene(next.scene, next.camera, {
+      ...bloom, aoScene: name, aoEnabled: name === 'hangar', godrayEnabled: name === 'surface',
+    });
     events.emit('state:change', name, old?.name);
   }
 
