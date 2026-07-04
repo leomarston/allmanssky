@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>planet — from-space visual stack test</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#129680;</text></svg>">
+  <title>planet-sphere — seamless orbit-to-surface descent</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127757;</text></svg>">
   <style>
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
     #game-canvas { display: block; width: 100vw; height: 100vh; }
+    #hud { position: fixed; left: 10px; top: 8px; font: 12px/1.4 monospace; color: #9fe; text-shadow: 0 0 4px #000; pointer-events: none; }
   </style>
   <script type="importmap">
     {
@@ -20,126 +21,174 @@
 </head>
 <body>
   <canvas id="game-canvas"></canvas>
+  <div id="hud"></div>
   <script type="module">
     import * as THREE from 'three';
     import { Engine } from '/src/core/engine.js';
-    import { createPlanetVisual } from '/src/render/planetmesh.js';
-    import { createStarfield } from '/src/render/starfield.js';
-    import { createSun } from '/src/render/sun.js';
+    import { PlanetSphere } from '/src/render/planetsphere.js';
 
     const canvas = document.getElementById('game-canvas');
-    const engine = new Engine(canvas);
+    const hud = document.getElementById('hud');
+    const engine = new Engine(canvas);                 // HDR / ACES / bloom pipeline
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.5, 4e6);
+    scene.background = new THREE.Color(0x01030a);
 
-    const SEED = Number(new URLSearchParams(location.search).get('seed')) || 1337;
+    const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 1, 3e5);
 
-    // backdrop
-    const starfield = createStarfield(SEED);
-    scene.add(starfield.object3d);
+    const SEED = Number(new URLSearchParams(location.search).get('seed')) || 20260704;
+    const RADIUS = 4000;
 
-    // --- sample PlanetDefs (contract shapes from ARCHITECTURE.md) ------------
-    const lushDef = {
-      id: 'demo:lush', seed: 90210, name: 'Veridia', biome: 'lush', radius: 58,
-      orbitRadius: 0, orbitPhase: 0, orbitSpeed: 0,
-      axialTilt: 0.42, dayLength: 640, gravity: 1.0, seaLevel: 0.34,
-      atmosphere: { density: 0.85, colorHex: '#6fb7ff', skyColorHex: '#7ec4ff', fogColorHex: '#9fd0ff' },
-      clouds: { coverage: 0.5, colorHex: '#ffffff' },
-      rings: { innerR: 84, outerR: 138, colorHex: '#cfc0a4', opacity: 0.9 },
-      hazard: { heat: 0, cold: 0.05, toxic: 0, rad: 0 },
-      weather: 'clear',
-      palette: {
-        deepWater: '#0a2c5e', shallowWater: '#1f6fae', shore: '#d9c68c',
-        low: '#41904d', mid: '#2e6d39', high: '#70684f', peak: '#eceef0',
-        cliff: '#5a5148', accent: '#8fd06a', glow: '#ffd88a',
-      },
-      resources: ['carbyne'], floraDensity: 0.8, faunaDensity: 0.6, crystalDensity: 0.1,
-      hasRuins: true, hasOutpost: false,
-      terrain: { relief: 0.6, roughness: 0.55, warp: 0.6, plateau: 0, crater: 0, canyon: 0 },
-    };
+    // --- lighting -------------------------------------------------------------
+    // A directional sun (direction only matters) + soft fills. Because the sun
+    // is directional it stays consistent under the floating-origin rebase.
+    const sunDirWorld = new THREE.Vector3(0.55, 0.42, 0.72).normalize();
+    const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
+    sun.position.copy(sunDirWorld).multiplyScalar(1e5);
+    scene.add(sun);
+    scene.add(new THREE.HemisphereLight(0x2a4a78, 0x0a0a12, 0.45));
+    scene.add(new THREE.AmbientLight(0x20303f, 0.35));
 
-    const volcanicDef = {
-      id: 'demo:volcanic', seed: 40417, name: 'Cindral', biome: 'volcanic', radius: 52,
-      orbitRadius: 0, orbitPhase: 0, orbitSpeed: 0,
-      axialTilt: -0.14, dayLength: 480, gravity: 1.3, seaLevel: 0,
-      atmosphere: { density: 0.45, colorHex: '#ff7a38', skyColorHex: '#7a2c14', fogColorHex: '#4a1c10' },
-      clouds: { coverage: 0.22, colorHex: '#4c4145' },
-      rings: null,
-      hazard: { heat: 0.95, cold: 0, toxic: 0.2, rad: 0.1 },
-      weather: 'ashfall',
-      palette: {
-        deepWater: '#160a07', shallowWater: '#2e130a', shore: '#241614',
-        low: '#221a19', mid: '#372923', high: '#4a3a30', peak: '#645850',
-        cliff: '#140e11', accent: '#ff5a22', glow: '#ff9c3c',
-      },
-      resources: ['solanite'], floraDensity: 0, faunaDensity: 0.05, crystalDensity: 0.3,
-      hasRuins: false, hasOutpost: false,
-      terrain: { relief: 0.85, roughness: 0.8, warp: 0.45, plateau: 0, crater: 0.3, canyon: 0.2 },
-    };
+    // --- starfield backdrop (self-contained) ----------------------------------
+    (function stars() {
+      const N = 1800, p = new Float32Array(N * 3);
+      let s = 987654321 >>> 0;
+      const rnd = () => (((s = (Math.imul(s ^ (s >>> 15), 0x2c1b3c6d)) >>> 0)) / 4294967296);
+      for (let i = 0; i < N; i++) {
+        const u = rnd() * 2 - 1, a = rnd() * Math.PI * 2, r = 1.2e5;
+        const sr = Math.sqrt(1 - u * u);
+        p[i * 3] = Math.cos(a) * sr * r; p[i * 3 + 1] = u * r; p[i * 3 + 2] = Math.sin(a) * sr * r;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+      const m = new THREE.PointsMaterial({ color: 0xffffff, size: 260, sizeAttenuation: true });
+      scene.add(new THREE.Points(g, m));
+    })();
 
-    const frozenDef = {
-      id: 'demo:frozen', seed: 77123, name: 'Palewake', biome: 'frozen', radius: 55,
-      orbitRadius: 0, orbitPhase: 0, orbitSpeed: 0,
-      axialTilt: 0.2, dayLength: 900, gravity: 0.8, seaLevel: 0.28,
-      atmosphere: { density: 0.55, colorHex: '#9fd4ff', skyColorHex: '#bfe4ff', fogColorHex: '#dceeff' },
-      clouds: { coverage: 0.38, colorHex: '#eef6ff' },
-      rings: null,
-      hazard: { heat: 0, cold: 0.95, toxic: 0, rad: 0 },
-      weather: 'snow',
-      palette: {
-        deepWater: '#0c2f55', shallowWater: '#2b7099', shore: '#b8ccd8',
-        low: '#c7dde9', mid: '#e2eef5', high: '#f2f9fd', peak: '#ffffff',
-        cliff: '#6c7f8f', accent: '#9fd4ff', glow: '#bfe8ff',
-      },
-      resources: ['cryostal'], floraDensity: 0.1, faunaDensity: 0.2, crystalDensity: 0.5,
-      hasRuins: false, hasOutpost: true,
-      terrain: { relief: 0.5, roughness: 0.6, warp: 0.5, plateau: 0.2, crater: 0.1, canyon: 0 },
-    };
+    // --- the planet -----------------------------------------------------------
+    const planet = new PlanetSphere(scene, { seed: SEED, radius: RADIUS, seaLevel: RADIUS });
+    planet.setSunDirection(sunDirWorld);
 
-    // --- layout ---------------------------------------------------------------
-    const sunPos = new THREE.Vector3(-2400, 520, 520);
-    const sunColor = 0xffe9c4;
+    engine.setScene(scene, camera, {
+      bloomStrength: 0.6, bloomRadius: 0.6, bloomThreshold: 0.9,
+      aoEnabled: false, godrayEnabled: false,
+    });
+    engine.setExposure(1.0);
 
-    const planets = [
-      { vis: createPlanetVisual(lushDef, { sunColor }), pos: new THREE.Vector3(-172, 20, 60) },
-      { vis: createPlanetVisual(volcanicDef, { sunColor }), pos: new THREE.Vector3(38, -28, -70) },
-      { vis: createPlanetVisual(frozenDef, { sunColor }), pos: new THREE.Vector3(226, 34, -170) },
-    ];
-    for (const p of planets) {
-      p.vis.group.position.copy(p.pos);
-      scene.add(p.vis.group);
+    // --- scripted descent -----------------------------------------------------
+    // camDir = fixed viewing direction from planet centre outward (off the sun
+    // and off the poles so the terminator and lighting read well). Altitude
+    // eases from far orbit (well outside the 1.035R atmosphere shell) down to a
+    // few units above the local terrain. Camera stays at the world origin; the
+    // planet is rebased under it (floating origin).
+    const worldUp = new THREE.Vector3(0, 1, 0);
+    const ALT_FAR = RADIUS * 6.0;   // 24000 u : orbit, whole planet in view
+    const ALT_NEAR = 32;            // just above the surface
+    const DURATION = 15;            // seconds for the full auto descent
+
+    // Pick a descent target: a sun-lit, non-polar, colourful mid-elevation
+    // (below the snow line) land point that is locally RUGGED — so the surface
+    // shot lands amid relief with grass/rock colour, not a blown-out snow peak.
+    const camDir = (function pickTarget() {
+      const best = new THREE.Vector3(0.38, 0.26, 0.90).normalize();
+      let bestScore = -1e9, s = 0x1234abcd >>> 0;
+      const rnd = () => ((s = (Math.imul(s ^ (s >>> 15), 0x2c1b3c6d)) >>> 0) / 4294967296);
+      const d = new THREE.Vector3(), t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), nb = new THREE.Vector3();
+      for (let i = 0; i < 800; i++) {
+        const u = rnd() * 2 - 1, a = rnd() * Math.PI * 2, sr = Math.sqrt(1 - u * u);
+        d.set(Math.cos(a) * sr, u, Math.sin(a) * sr);
+        if (Math.abs(d.y) > 0.5) continue;                 // off the poles
+        if (d.dot(sunDirWorld) < 0.25) continue;           // sun-lit side
+        const alt = planet.heightAt(d) - RADIUS;
+        if (alt < 25 || alt > 135) continue;               // colourful land, below snow
+        t1.set(0, 1, 0).cross(d).normalize(); t2.copy(d).cross(t1);
+        let rug = 0;                                        // local relief energy
+        for (let n = 0; n < 6; n++) {
+          const ang = n / 6 * Math.PI * 2;
+          nb.copy(d).addScaledVector(t1, Math.cos(ang) * 0.012).addScaledVector(t2, Math.sin(ang) * 0.012).normalize();
+          rug += Math.abs((planet.heightAt(nb) - RADIUS) - alt);
+        }
+        const score = rug * 2 - Math.abs(alt - 85);
+        if (score > bestScore) { bestScore = score; best.copy(d); }
+      }
+      return best.normalize();
+    })();
+
+    const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+    const _camPos = new THREE.Vector3();
+    const _tan = new THREE.Vector3();
+    const _look = new THREE.Vector3();
+    const _up = new THREE.Vector3();
+
+    let manual = false, tState = 0;
+
+    function applyT(t) {
+      t = Math.min(1, Math.max(0, t));
+      tState = t;
+      const groundR = planet.heightAt(camDir);
+      const alt = ALT_NEAR + (ALT_FAR - ALT_NEAR) * Math.pow(1 - t, 3);
+      const dist = groundR + alt;
+      _camPos.copy(camDir).multiplyScalar(dist);      // universe-space camera pos
+
+      planet.update(1 / 60, _camPos);                  // rebase + LOD
+      planet.setSunDirection(sunDirWorld);
+
+      // Aim by blending the VIEW DIRECTION (camera-relative), which keeps the
+      // planet in frame at every altitude. Orbit -> look at the planet centre;
+      // surface -> look mostly along the horizontal tangent, dipped ~12 deg so
+      // foreground terrain fills the lower frame and the curved limb reads.
+      const nearness = 1 - smoothstep(60, 2600, alt);
+      const k = nearness * 0.82;
+      _look.copy(_camPos).multiplyScalar(-1).normalize();  // unit dir toward planet centre
+      _tan.copy(worldUp).cross(camDir).normalize();        // horizontal forward tangent
+      _look.multiplyScalar(1 - k).addScaledVector(_tan, k).normalize().multiplyScalar(1000);
+
+      // Level the horizon near the surface: blend camera "up" from world-up
+      // (orbit) to the local radial (camDir) so the ground reads flat and the
+      // curved limb sits horizontal.
+      _up.copy(worldUp).multiplyScalar(1 - nearness).addScaledVector(camDir, nearness).normalize();
+
+      camera.position.set(0, 0, 0);
+      camera.up.copy(_up);
+      camera.lookAt(_look);
+      camera.updateMatrixWorld(true);
+
+      const st = planet.getStats();
+      hud.textContent =
+        `t=${t.toFixed(3)}  alt=${alt.toFixed(0)}u  dist=${dist.toFixed(0)}u\n` +
+        `leaves=${st.leaves}  tris=${st.triangles | 0}  builds=${st.builds}`;
     }
-    // pitch the ringed planet so the ring plane reads as an ellipse
-    planets[0].vis.group.rotation.x = 0.38;
 
-    // HDR sun just off-frame left; its corona glow bleeds into the composition
-    const sun = createSun({ class: 'G', colorHex: sunColor, radius: 170, temperature: 5700 });
-    sun.object3d.position.copy(sunPos);
-    sun.light.position.copy(sunPos);
-    scene.add(sun.object3d, sun.light);
+    function renderFrame() { engine.render(); }
 
-    camera.position.set(0, 10, 430);
-    camera.lookAt(20, 4, -40);
-
-    engine.setScene(scene, camera, { bloomStrength: 0.65, bloomRadius: 0.55, bloomThreshold: 0.85 });
-    engine.setExposure(1.1);
-
-    const tmpSunDir = new THREE.Vector3();
-    const tmpWorld = new THREE.Vector3();
+    // --- loop -----------------------------------------------------------------
+    let start = performance.now();
     let ready = false;
     function frame() {
-      const dt = engine.tick();
-      starfield.update(dt, camera.quaternion);
-      sun.update(dt, camera.position);
-      for (const p of planets) {
-        p.vis.group.getWorldPosition(tmpWorld);
-        tmpSunDir.copy(sunPos).sub(tmpWorld).normalize();
-        p.vis.update(dt, camera.position, tmpSunDir);
+      engine.tick();
+      if (!manual) {
+        const t = Math.min(1, (performance.now() - start) / 1000 / DURATION);
+        applyT(t);
       }
-      engine.render();
-      if (!ready) { ready = true; window.__AMS__ = { ready: true }; }
+      renderFrame();
+      if (!ready) {
+        ready = true;
+        window.__AMS__ = { ready: true };
+        console.log('[planet] ready — seamless cube-sphere planet, radius', RADIUS,
+          '| drive window.__PLANET__.setT(0..1)');
+      }
       requestAnimationFrame(frame);
     }
+
+    // --- test hook ------------------------------------------------------------
+    window.__PLANET__ = {
+      planet, camera, engine,
+      get t() { return tState; },
+      setT(fraction) { manual = true; applyT(fraction); renderFrame(); },
+      play() { manual = false; start = performance.now(); },
+    };
+
+    applyT(0);       // start at orbit so the very first frame is a round planet
     frame();
   </script>
 </body>
