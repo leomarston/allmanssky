@@ -241,7 +241,7 @@ class Game {
         old?.exit?.();
         const st = new PlanetState(this.ctx);
         this.state = st;
-        await st.enter({ seed: Number(q.get('seed') ?? GALAXY_SEED_DEFAULT) });
+        await st.enter({ seed: Number(q.get('seed') ?? GALAXY_SEED_DEFAULT), biome: q.get('biome') || 'lush' });
         this.engine.setScene(st.scene, st.camera, {
           bloomStrength: 0.6, bloomRadius: 0.6, bloomThreshold: 0.9,
           aoEnabled: false, godrayEnabled: false,

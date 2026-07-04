@@ -30,7 +30,7 @@
 import * as THREE from 'three';
 import { input } from '../core/input.js';
 import { buildShip } from '../render/shipmesh.js';
-import { PlanetSphere } from '../render/planetsphere.js';
+import { PlanetSphere, BIOMES, pickBiome } from '../render/planetsphere.js';
 import { PlanetScatter } from '../render/planetscatter.js';
 import { PlanetFauna } from '../render/planetfauna.js';
 import { PlanetResources } from '../render/planetresources.js';
@@ -116,45 +116,48 @@ export class PlanetState {
     const { ctx } = this;
     const seed = (params.seed ?? PLANET_SEED_DEFAULT) >>> 0;
 
+    // Biome: an explicit key (?biome=desert / params.biome), else picked
+    // deterministically from the seed. Drives the planet AND the scene lighting.
+    const biome = (typeof params.biome === 'string' && BIOMES[params.biome])
+      ? BIOMES[params.biome] : pickBiome(seed);
+    this.biome = biome;
+    const L = biome.light;
+
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x01030a);
+    this.scene.background = new THREE.Color(biome.atmosphere.thin ? 0x000000 : 0x01030a);
     this.camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 4e5);
     this.scene.add(this.camera);
 
-    // lighting: a warm directional key (direction-only, survives the rebase) + a
-    // low hemispheric bounce. The heavy lifting is the sky IBL below — the old
-    // flat blue AmbientLight is GONE because scene.environment now supplies real
-    // hemispheric irradiance, so shadow-side faces read as lit mineral instead
-    // of crushing to a dead blue near-black.
-    const sun = new THREE.DirectionalLight(0xffe6c2, 3.2);   // warm golden key
+    // lighting: a directional key + low hemispheric bounce, both biome-tinted.
+    // The heavy lifting is the sky IBL below (scene.environment) which supplies
+    // real hemispheric irradiance so shadow-side faces read as lit, not black.
+    const sun = new THREE.DirectionalLight(L.sunColor, L.sunIntensity);
     sun.position.copy(SUN_DIR).multiplyScalar(1e5);
     this.scene.add(sun);
-    this.scene.add(new THREE.HemisphereLight(0x9fb4d6, 0x5a4a34, 0.22)); // low warm bounce
+    this.scene.add(new THREE.HemisphereLight(L.hemiSky, L.hemiGround, L.hemiInt));
     this._sun = sun;
 
-    // image-based lighting: a PMREM environment baked ONCE from a procedural sky
-    // (zenith→horizon gradient + sun disc + ground bounce). SUN_DIR is static so
-    // fromScene runs a single time. This is the single biggest "flat three.js →
-    // real PBR" cue — it rescues every MeshStandardMaterial's shadow faces and
-    // gives the sea/crystals real specular. intensity ~1.15 keeps bright horizon
-    // reflections under the bloom threshold.
+    // image-based lighting: a PMREM environment baked ONCE from the biome's sky.
     this.env = createSkyEnvironment(ctx.engine.renderer, {
-      zenith: '#3d6ea8', horizon: '#bcd0e0', ground: '#6b5a44',
-      sunDir: SUN_DIR, sunColor: '#fff2d8', sunIntensity: 3.0, haze: 0.35,
+      zenith: L.envZenith, horizon: L.envHorizon, ground: L.envGround,
+      sunDir: SUN_DIR, sunColor: biome.atmosphere.sunColor, sunIntensity: 3.0, haze: 0.35,
     });
-    this.env.apply(this.scene, 1.15);
+    this.env.apply(this.scene, L.envIntensity);
 
-    // aerial perspective: exponential fog tinted to the sky horizon, altitude-
-    // gated per-frame in update() (so orbit stays crisp but distant ground melts
-    // into the sky). A small exposure lift warms the whole frame.
-    this.scene.fog = new THREE.FogExp2(0xbcd0e0, 0.0);
+    // aerial perspective: exponential fog in the biome's tint, altitude-gated per
+    // frame in update(). Near-vacuum (barren) worlds get much thinner fog.
+    this._fogBase = new THREE.Color(L.fog);
+    this._fogThin = biome.atmosphere.thin ? 0.32 : 1.0;
+    this.scene.fog = new THREE.FogExp2(L.fog, 0.0);
     ctx.engine.setExposure(1.1);
 
     this._buildStars();
 
-    // the real planet
+    // the real planet (same biome descriptor so light + world agree). No
+    // seaLevel override — PlanetSphere derives it from the biome (no-sea worlds
+    // park it below the terrain floor so nothing reads as underwater).
     this.planet = new PlanetSphere(this.scene, {
-      seed, radius: PLANET_RADIUS, seaLevel: PLANET_RADIUS,
+      seed, radius: PLANET_RADIUS, biome,
     });
     this.planet.setSunDirection(SUN_DIR);
     this.planet.setPlanetCenter(new THREE.Vector3(0, 0, 0));
@@ -308,18 +311,18 @@ export class PlanetState {
     // ground distant terrain dissolves into the sky) and tint it to the sky
     // horizon at the current sun elevation — the SAME palette the atmosphere
     // shell uses, so the terrain→sky seam stays invisible.
+    // fade stars out in daylight (the sky dome takes over) and back in as we
+    // climb to orbit, where the sky dome fades to space.
+    if (this.stars) this.stars.material.opacity = 1 - this.planet.groundAmt;
+
     const fog = this.scene.fog;
     if (fog) {
       const nearGround = Math.max(0, Math.min(1, 1 - this.agl / 1800));
-      fog.density = nearGround * 0.00042;
+      fog.density = nearGround * 0.00042 * this._fogThin;
+      // biome fog tint, dimmed on the night side (near-vacuum worlds barely fog).
       const sunUp = SUN_DIR.dot(this._sUp);
       const day = Math.max(0, Math.min(1, (sunUp + 0.25) / 0.37));
-      const w = (1 - day) * 0.7, bright = 0.15 + 0.85 * day;
-      fog.color.setRGB(
-        (0.52 + (0.95 - 0.52) * w) * bright,
-        (0.66 + (0.50 - 0.66) * w) * bright,
-        (0.85 + (0.30 - 0.85) * w) * bright,
-      );
+      fog.color.copy(this._fogBase).multiplyScalar(0.25 + 0.75 * day);
     }
 
     this._hud(dt);
@@ -581,7 +584,7 @@ export class PlanetState {
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(p, 3));
-    const m = new THREE.PointsMaterial({ color: 0xffffff, size: 260, sizeAttenuation: true });
+    const m = new THREE.PointsMaterial({ color: 0xffffff, size: 260, sizeAttenuation: true, transparent: true, depthWrite: false });
     this.stars = new THREE.Points(g, m);
     this.stars.frustumCulled = false;      // it's centred on the camera (origin)
     this.scene.add(this.stars);

@@ -100,6 +100,117 @@ function ridged3(noise, x, y, z, octaves, lacunarity = 2.0, gain = 0.5) {
 }
 
 // ---------------------------------------------------------------------------
+// Biome archetypes. Each fully parameterises PlanetSphere so one engine can be
+// any No Man's Sky-style world: terrain colour stops, terrain shaping, sea,
+// atmosphere shell, cloud deck, and the scene lighting (read by planetstate.js).
+// Colours are hex ints; atmosphere zenith/horizon are LINEAR rgb triples.
+// ---------------------------------------------------------------------------
+export const BIOMES = {
+  lush: {
+    key: 'lush', name: 'Verdant',
+    palette: { deep: 0x05213a, wet: 0x8a7a55, beach: 0xcdb98f, grassLush: 0x4f7a3a, grassArid: 0x8a8a46, soil: 0x6b5334, rock: 0x6d5f4d, cliff: 0x5a5048, snow: 0xf2f5fb },
+    moistureBias: 0.15,
+    terrain: { contMul: 1.0, mtnMul: 1.0, detMul: 1.0, hasSea: true, snowScale: 1.0 },
+    atmosphere: { limb: 0x5aa2ff, zenith: [0.10, 0.26, 0.62], horizon: [0.52, 0.66, 0.85], sunColor: 0xfff2d8, strength: 1.35, thin: false },
+    sea: { color: 0x184b7a, roughness: 0.18 },
+    clouds: { coverageLo: 0.50, coverageHi: 0.74, opacity: 0.6, tint: 0xffffff },
+    light: { sunColor: 0xffe6c2, sunIntensity: 3.2, hemiSky: 0x9fb4d6, hemiGround: 0x5a4a34, hemiInt: 0.22, envZenith: 0x3d6ea8, envHorizon: 0xbcd0e0, envGround: 0x6b5a44, envIntensity: 1.15, fog: 0xbcd0e0 },
+    hazard: 'none',
+  },
+  ocean: {
+    key: 'ocean', name: 'Aquatic',
+    palette: { deep: 0x03253f, wet: 0x8fae7a, beach: 0xd8cc9a, grassLush: 0x3f8a5a, grassArid: 0x6a9a4a, soil: 0x5a6a3a, rock: 0x6a6a5a, cliff: 0x4a5a4a, snow: 0xf0f8ff },
+    moistureBias: 0.7,
+    terrain: { contMul: 0.55, mtnMul: 0.6, detMul: 0.9, hasSea: true, snowScale: 1.2 },
+    atmosphere: { limb: 0x4ab8ff, zenith: [0.12, 0.34, 0.66], horizon: [0.58, 0.74, 0.88], sunColor: 0xffffe8, strength: 1.4, thin: false },
+    sea: { color: 0x0a6a9a, roughness: 0.14 },
+    clouds: { coverageLo: 0.42, coverageHi: 0.66, opacity: 0.72, tint: 0xffffff },
+    light: { sunColor: 0xfff4e0, sunIntensity: 3.3, hemiSky: 0x8ac0e0, hemiGround: 0x3a6a5a, hemiInt: 0.26, envZenith: 0x3a80b0, envHorizon: 0xbce0ee, envGround: 0x2a5a6a, envIntensity: 1.2, fog: 0xbce0ee },
+    hazard: 'none',
+  },
+  desert: {
+    key: 'desert', name: 'Arid',
+    palette: { deep: 0x2a2a20, wet: 0xa07a4a, beach: 0xd8b878, grassLush: 0xb89a5a, grassArid: 0xc8a05e, soil: 0xa8703a, rock: 0x9a5f3a, cliff: 0x7a4529, snow: 0xe8d8b8 },
+    moistureBias: -0.8,
+    terrain: { contMul: 0.85, mtnMul: 1.2, detMul: 1.2, hasSea: false, snowScale: 0.0 },
+    atmosphere: { limb: 0xffb060, zenith: [0.35, 0.30, 0.42], horizon: [0.85, 0.68, 0.45], sunColor: 0xfff0d0, strength: 1.1, thin: false },
+    sea: { color: 0x3a2a1a, roughness: 0.5 },
+    clouds: { coverageLo: 0.62, coverageHi: 0.86, opacity: 0.26, tint: 0xe8d0b0 },
+    light: { sunColor: 0xfff0d8, sunIntensity: 3.6, hemiSky: 0xe0c090, hemiGround: 0x6a4a2a, hemiInt: 0.28, envZenith: 0x9a7a6a, envHorizon: 0xe8c898, envGround: 0x8a6038, envIntensity: 1.2, fog: 0xe8c898 },
+    hazard: 'heat',
+  },
+  frozen: {
+    key: 'frozen', name: 'Glacial',
+    palette: { deep: 0x1a3a5a, wet: 0xb8c8d8, beach: 0xd8e4ee, grassLush: 0xc8d8e0, grassArid: 0xa8b8c0, soil: 0x8a9aa8, rock: 0x8494a0, cliff: 0x6a7a88, snow: 0xffffff },
+    moistureBias: -0.2,
+    terrain: { contMul: 1.1, mtnMul: 1.15, detMul: 1.0, hasSea: true, snowScale: 0.15 },
+    atmosphere: { limb: 0x9ec8ff, zenith: [0.18, 0.34, 0.60], horizon: [0.72, 0.82, 0.92], sunColor: 0xeef4ff, strength: 1.4, thin: false },
+    sea: { color: 0x2a5a7a, roughness: 0.3 },
+    clouds: { coverageLo: 0.45, coverageHi: 0.70, opacity: 0.7, tint: 0xeaf0f8 },
+    light: { sunColor: 0xdfeaff, sunIntensity: 2.6, hemiSky: 0xb8cce0, hemiGround: 0x8090a0, hemiInt: 0.32, envZenith: 0x5a80b0, envHorizon: 0xcdd9e6, envGround: 0x8896a4, envIntensity: 1.25, fog: 0xcdd9e6 },
+    hazard: 'cold',
+  },
+  toxic: {
+    key: 'toxic', name: 'Blighted',
+    palette: { deep: 0x1a2a12, wet: 0x5a6a2a, beach: 0x7a8a3a, grassLush: 0x6a9a2a, grassArid: 0x8a9a3a, soil: 0x4a5a22, rock: 0x5a5a3a, cliff: 0x44502a, snow: 0xc8d89a },
+    moistureBias: 0.5,
+    terrain: { contMul: 0.9, mtnMul: 0.8, detMul: 1.1, hasSea: true, snowScale: 0.6 },
+    atmosphere: { limb: 0x9aff6a, zenith: [0.16, 0.30, 0.14], horizon: [0.55, 0.68, 0.30], sunColor: 0xd8ffb0, strength: 1.5, thin: false },
+    sea: { color: 0x3a5a2a, roughness: 0.22 },
+    clouds: { coverageLo: 0.38, coverageHi: 0.62, opacity: 0.75, tint: 0xb0c878 },
+    light: { sunColor: 0xd8ffb0, sunIntensity: 2.8, hemiSky: 0x8aa85a, hemiGround: 0x4a5a2a, hemiInt: 0.35, envZenith: 0x6a8a3a, envHorizon: 0x9ab060, envGround: 0x4a5a2a, envIntensity: 1.2, fog: 0x9ab060 },
+    hazard: 'toxic',
+  },
+  scorched: {
+    key: 'scorched', name: 'Scorched',
+    palette: { deep: 0x1a0a06, wet: 0x3a1a10, beach: 0x4a2418, grassLush: 0x3a2018, grassArid: 0x2a1810, soil: 0x5a2818, rock: 0x3a2420, cliff: 0x2a1a16, snow: 0xff6a2a },
+    moistureBias: -0.9,
+    terrain: { contMul: 0.9, mtnMul: 1.4, detMul: 1.3, hasSea: false, snowScale: 0.0 },
+    atmosphere: { limb: 0xff5a2a, zenith: [0.30, 0.10, 0.06], horizon: [0.75, 0.28, 0.12], sunColor: 0xffd0a0, strength: 1.5, thin: false },
+    sea: { color: 0x2a0a06, roughness: 0.5 },
+    clouds: { coverageLo: 0.55, coverageHi: 0.80, opacity: 0.5, tint: 0x6a4a3a },
+    light: { sunColor: 0xffb890, sunIntensity: 2.8, hemiSky: 0xaa5a3a, hemiGround: 0x3a1a12, hemiInt: 0.4, envZenith: 0x6a2a1a, envHorizon: 0xc85a2a, envGround: 0x3a1a10, envIntensity: 1.1, fog: 0x8a3a20 },
+    hazard: 'heat',
+  },
+  barren: {
+    key: 'barren', name: 'Barren',
+    palette: { deep: 0x2a2a2e, wet: 0x6a6a70, beach: 0x7a7a80, grassLush: 0x8a8a90, grassArid: 0x9a9aa0, soil: 0x6a6a72, rock: 0x8a8a92, cliff: 0x5a5a62, snow: 0xd8d8e0 },
+    moistureBias: -0.5,
+    terrain: { contMul: 0.7, mtnMul: 1.0, detMul: 1.4, hasSea: false, snowScale: 0.4 },
+    atmosphere: { limb: 0x6a7a9a, zenith: [0.02, 0.03, 0.05], horizon: [0.10, 0.12, 0.16], sunColor: 0xffffff, strength: 0.35, thin: true },
+    sea: { color: 0x1a1a1e, roughness: 0.6 },
+    clouds: { coverageLo: 0.9, coverageHi: 1.0, opacity: 0.0, tint: 0xffffff },
+    light: { sunColor: 0xffffff, sunIntensity: 3.4, hemiSky: 0x2a3040, hemiGround: 0x1a1a1e, hemiInt: 0.12, envZenith: 0x1a2030, envHorizon: 0x3a4050, envGround: 0x2a2a2e, envIntensity: 0.7, fog: 0x0a0c10 },
+    hazard: 'radiation',
+  },
+  exotic: {
+    key: 'exotic', name: 'Anomalous',
+    palette: { deep: 0x2a0a3a, wet: 0x8a4a9a, beach: 0xba7ac8, grassLush: 0x9a3aca, grassArid: 0x3acaba, soil: 0x6a2a7a, rock: 0x4a3a6a, cliff: 0x3a2a5a, snow: 0xf0d8ff },
+    moistureBias: 0.0,
+    terrain: { contMul: 1.0, mtnMul: 1.2, detMul: 1.1, hasSea: true, snowScale: 0.7 },
+    atmosphere: { limb: 0xd85aff, zenith: [0.22, 0.10, 0.34], horizon: [0.72, 0.45, 0.82], sunColor: 0xffd8ff, strength: 1.5, thin: false },
+    sea: { color: 0x5a2a8a, roughness: 0.16 },
+    clouds: { coverageLo: 0.48, coverageHi: 0.72, opacity: 0.55, tint: 0xe0b0f0 },
+    light: { sunColor: 0xf0c8ff, sunIntensity: 3.0, hemiSky: 0xba7aca, hemiGround: 0x4a2a6a, hemiInt: 0.3, envZenith: 0x6a3a8a, envHorizon: 0xc890e0, envGround: 0x4a2a6a, envIntensity: 1.2, fog: 0xc890e0 },
+    hazard: 'exotic',
+  },
+};
+
+// Deterministic seed -> biome. Weighted so common worlds dominate and exotic is
+// rare, mirroring NMS's distribution. Returns a biome descriptor object.
+const BIOME_WEIGHTS = [
+  ['lush', 20], ['desert', 16], ['frozen', 16], ['barren', 14],
+  ['toxic', 12], ['scorched', 11], ['ocean', 8], ['exotic', 3],
+];
+export function pickBiome(seed) {
+  let total = 0;
+  for (const [, w] of BIOME_WEIGHTS) total += w;
+  let r = (hash32(seed, 0xb10e) >>> 0) % total;
+  for (const [k, w] of BIOME_WEIGHTS) { if (r < w) return BIOMES[k]; r -= w; }
+  return BIOMES.lush;
+}
+
+// ---------------------------------------------------------------------------
 // Chunk: one quadtree node on a cube face. Owns either a mesh (leaf) or four
 // children. Distance-to-camera drives split/merge.
 // ---------------------------------------------------------------------------
@@ -223,15 +334,27 @@ export class PlanetSphere {
     const seed = (opts.seed ?? 1337) >>> 0;
     this.scene = scene;
     this.radius = opts.radius ?? 4000;
-    this.seaLevel = opts.seaLevel ?? this.radius;
     this.maxDepth = opts.maxDepth ?? 7;
     this.grid = opts.grid ?? 16;
     this.splitRatio = opts.splitRatio ?? 0.28;
 
-    // Elevation amplitudes as a fraction of radius (gameplay-exaggerated relief).
-    this.contAmp = this.radius * 0.018;  // rolling continents
-    this.mtnAmp = this.radius * 0.045;   // ridged mountain ranges
-    this.detAmp = this.radius * 0.005;   // fine surface detail
+    // Biome: a descriptor object (opts.biome), a key string (opts.biome='desert'),
+    // or deterministically picked from the seed. Drives palette, terrain shaping,
+    // sea, atmosphere, clouds — and the scene lighting read by planetstate.js.
+    this.biome = (opts.biome && typeof opts.biome === 'object') ? opts.biome
+      : (typeof opts.biome === 'string' && BIOMES[opts.biome]) ? BIOMES[opts.biome]
+        : pickBiome(seed);
+    const bt = this.biome.terrain;
+    this.hasSea = bt.hasSea;
+    // No-sea worlds park the sea radius below the terrain floor so nothing ever
+    // reads as "underwater" and the sea sphere is skipped entirely.
+    this.seaLevel = opts.seaLevel ?? (this.hasSea ? this.radius : this.radius * 0.95);
+    this.snowScale = bt.snowScale;
+
+    // Elevation amplitudes as a fraction of radius (biome-shaped, exaggerated).
+    this.contAmp = this.radius * 0.018 * bt.contMul;  // rolling continents
+    this.mtnAmp = this.radius * 0.045 * bt.mtnMul;    // ridged mountain ranges
+    this.detAmp = this.radius * 0.005 * bt.detMul;    // fine surface detail
     // Near-surface relief: two higher-frequency, low-amplitude octaves so the
     // ground reads as rolling undulation up close (metres-to-tens-of-metres),
     // not a flat ball. Kept gentle so slopes stay walkable and — because both
@@ -252,6 +375,17 @@ export class PlanetSphere {
     // large-scale moisture field: drives lush-vs-arid grass and soil patches so
     // the biome reads as varied terrain rather than one flat green.
     this.bioNoise = new SimplexNoise(hash32(seed, 0x7c) >>> 0);
+
+    // Precompute the biome palette as THREE.Color once (no per-vertex setHex).
+    const P = this.biome.palette;
+    this._pal = {
+      shallow: new THREE.Color(this.biome.sea.color),
+      deep: new THREE.Color(P.deep), wet: new THREE.Color(P.wet), beach: new THREE.Color(P.beach),
+      grassLush: new THREE.Color(P.grassLush), grassArid: new THREE.Color(P.grassArid),
+      soil: new THREE.Color(P.soil), rock: new THREE.Color(P.rock),
+      cliff: new THREE.Color(P.cliff), snow: new THREE.Color(P.snow),
+    };
+    this._moistBias = this.biome.moistureBias ?? 0;
 
     this.planetCenter = new THREE.Vector3(0, 0, 0);
     this._camLocal = new THREE.Vector3();
@@ -349,6 +483,7 @@ export class PlanetSphere {
     this._buildFaces();
     this._buildSea();
     this._buildAtmosphere();
+    this._buildSkyDome();
     this._buildClouds();
   }
 
@@ -392,34 +527,39 @@ export class PlanetSphere {
   // written into (out*) as LINEAR rgb (THREE.Color.setHex converts from sRGB).
   // Slope (0 flat .. 1 vertical) lets cliffs show bare rock — the NMS read.
   _biomeColor(r, nx, ny, nz, slope, col) {
+    const pal = this._pal;
     const alt = r - this.seaLevel;
     const lat = Math.abs(ny);            // pole axis = y
     if (alt < 0) {
-      // underwater floor: shallow teal -> deep navy (still visible at shore)
+      // underwater floor: biome shallow tint -> deep (still visible at shore).
       const t = smoothstep(0, -140, alt);
-      col.setHex(0x2a6f97).lerp(SCRATCH_COL.setHex(0x05213a), t);
+      col.copy(pal.shallow).lerp(SCRATCH_COL.copy(pal.deep), t);
       return col;
     }
-    // macro moisture (large patches): lush grass where wet, arid where dry.
+    // macro moisture (large patches): lush where wet, arid where dry, plus the
+    // biome's own bias (deserts skew arid, marshes/oceans skew lush).
     const moist = 0.5 + 0.5 * this.bioNoise.fbm3(nx * 1.9 + 5.1, ny * 1.9 + 2.3, nz * 1.9 + 8.8, 4);
-    const dry = 1 - moist;
-    const snowStart = 150 * (1 - lat * 0.7);
-    // shoreline: wet sand -> dry beach across the first few metres.
-    col.setHex(0x8a7a55).lerp(SCRATCH_COL.setHex(0xcdb98f), smoothstep(0, 4, alt));
-    // beach -> grass (moisture picks lush vs. arid olive).
-    const grass = SCRATCH_COL3.setHex(0x4f7a3a).lerp(SCRATCH_COL.setHex(0x8a8a46), dry);
+    const dry = Math.max(0, Math.min(1, (1 - moist) - this._moistBias));
+    // snowScale 0 pushes the snow line to infinity (deserts/scorched never cap).
+    const snowStart = this.snowScale <= 0 ? 1e9 : 150 * this.snowScale * (1 - lat * 0.7);
+    // shoreline: wet -> dry beach across the first few metres.
+    col.copy(pal.wet).lerp(SCRATCH_COL.copy(pal.beach), smoothstep(0, 4, alt));
+    // beach -> ground (moisture picks lush vs. arid).
+    const grass = SCRATCH_COL3.copy(pal.grassLush).lerp(SCRATCH_COL.copy(pal.grassArid), dry);
     col.lerp(grass, smoothstep(3, 22, alt));
     // drier mid-altitude ground shows exposed soil.
-    col.lerp(SCRATCH_COL.setHex(0x6b5334), smoothstep(40, 80, alt) * (0.3 + 0.5 * dry));
+    col.lerp(SCRATCH_COL.copy(pal.soil), smoothstep(40, 80, alt) * (0.3 + 0.5 * dry));
     // -> altitude rock as it climbs toward the peaks.
-    col.lerp(SCRATCH_COL.setHex(0x6d5f4d), smoothstep(70, snowStart * 0.85, alt));
+    col.lerp(SCRATCH_COL.copy(pal.rock), smoothstep(70, snowStart * 0.85, alt));
     // steep faces below the snow line read as bare cliff rock.
     const belowSnow = 1 - smoothstep(snowStart, snowStart + 30, alt);
-    col.lerp(SCRATCH_COL.setHex(0x5a5048), smoothstep(0.34, 0.62, slope) * belowSnow);
-    // rock -> snow above the snow line.
-    col.lerp(SCRATCH_COL.setHex(0xf2f5fb), smoothstep(snowStart, snowStart + 55, alt));
-    // extra polar whitening regardless of altitude.
-    col.lerp(SCRATCH_COL.setHex(0xf2f5fb), smoothstep(0.80, 0.96, lat) * 0.85);
+    col.lerp(SCRATCH_COL.copy(pal.cliff), smoothstep(0.34, 0.62, slope) * belowSnow);
+    // rock -> snow/cap above the snow line.
+    col.lerp(SCRATCH_COL.copy(pal.snow), smoothstep(snowStart, snowStart + 55, alt));
+    // extra polar whitening — only for worlds that actually cap (snowScale>0).
+    if (this.snowScale > 0) {
+      col.lerp(SCRATCH_COL.copy(pal.snow), smoothstep(0.80, 0.96, lat) * 0.85);
+    }
     return col;
   }
 
@@ -554,8 +694,9 @@ export class PlanetSphere {
   // --- sea + atmosphere ----------------------------------------------------
 
   _buildSea() {
+    if (!this.hasSea) { this.seaMesh = null; this.seaMat = null; return; }
     this.seaMat = new THREE.MeshStandardMaterial({
-      color: 0x184b7a, roughness: 0.18, metalness: 0.0,
+      color: this.biome.sea.color, roughness: this.biome.sea.roughness, metalness: 0.0,
       polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
     });
     this.seaMesh = new THREE.Mesh(new THREE.SphereGeometry(this.seaLevel, 128, 96), this.seaMat);
@@ -568,15 +709,16 @@ export class PlanetSphere {
     const shellR = this.radius * 1.035;
     const ratio = this.radius / shellR;
     const muMax = Math.sqrt(Math.max(1 - ratio * ratio, 1e-4));
+    const A = this.biome.atmosphere;
     this.atmoMat = new THREE.ShaderMaterial({
       uniforms: {
-        uColor: { value: new THREE.Color(0x5aa2ff) },       // limb tint
+        uColor: { value: new THREE.Color(A.limb) },         // limb tint
         uSunDir: { value: new THREE.Vector3(1, 0, 0) },
-        uSunColor: { value: new THREE.Color(0xfff2d8) },
-        uZenith: { value: new THREE.Color(0.10, 0.26, 0.62) },
-        uHorizon: { value: new THREE.Color(0.52, 0.66, 0.85) },  // matches the fog palette
+        uSunColor: { value: new THREE.Color(A.sunColor) },
+        uZenith: { value: new THREE.Color(A.zenith[0], A.zenith[1], A.zenith[2]) },
+        uHorizon: { value: new THREE.Color(A.horizon[0], A.horizon[1], A.horizon[2]) },  // matches the fog palette
         uMuMax: { value: muMax },
-        uStrength: { value: 1.35 },
+        uStrength: { value: A.strength },
         uUp: { value: new THREE.Vector3(0, 1, 0) },         // radial up at the player
         uGroundAmt: { value: 0 },                            // 1 at surface -> 0 in orbit
       },
@@ -638,8 +780,13 @@ export class PlanetSphere {
           float disc = smoothstep(0.9992, 0.9997, sd) * 8.0;
           vec3 ground = (sky + uSunColor * (halo + disc)) * dayMaster;
 
-          // blend: full dome on the surface, thin limb from orbit.
-          vec3 c = limb * (1.0 - uGroundAmt * 0.5) + ground * uGroundAmt;
+          // The thin shell now renders ONLY the orbital limb; the full ground
+          // sky lives on the camera-centred sky dome (a thin shell cannot cover
+          // the zenith from the surface). The ground term is kept as a faint
+          // horizon wash near the surface so the terrain-to-sky seam stays warm.
+          // The limb glow is an ORBIT phenomenon — fade it out near the surface
+          // so its grazing silhouette line does not cross the foreground terrain.
+          vec3 c = limb * (1.0 - uGroundAmt * 0.9) + ground * uGroundAmt * 0.12;
           gl_FragColor = vec4(c, 1.0);
         }`,
       side: THREE.BackSide,
@@ -653,11 +800,61 @@ export class PlanetSphere {
     this.root.add(this.atmoMesh);
   }
 
+  // Full ground sky: a big camera-centred inward sphere (the camera is pinned at
+  // the world origin, so a sphere at origin surrounds it and covers the whole
+  // dome — unlike the thin atmosphere shell). Opaque background drawn first;
+  // colour * uGroundAmt so it fades to black (space) as you climb to orbit, at
+  // which point the stars (faded in by planetstate) take over.
+  _buildSkyDome() {
+    const A = this.biome.atmosphere;
+    this.skyMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uSunDir: { value: new THREE.Vector3(1, 0, 0) },
+        uSunColor: { value: new THREE.Color(A.sunColor) },
+        uZenith: { value: new THREE.Color(A.zenith[0], A.zenith[1], A.zenith[2]) },
+        uHorizon: { value: new THREE.Color(A.horizon[0], A.horizon[1], A.horizon[2]) },
+        uUp: { value: new THREE.Vector3(0, 1, 0) },
+        uGroundAmt: { value: 0 },
+      },
+      vertexShader: /* glsl */`
+        varying vec3 vDir;
+        void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: /* glsl */`
+        uniform vec3 uSunDir; uniform vec3 uSunColor; uniform vec3 uZenith; uniform vec3 uHorizon;
+        uniform vec3 uUp; uniform float uGroundAmt;
+        varying vec3 vDir;
+        void main() {
+          vec3 viewDir = normalize(vDir);
+          float elev = clamp(dot(viewDir, uUp), -1.0, 1.0);
+          float sunUp = dot(uSunDir, uUp);
+          float sd = max(dot(viewDir, uSunDir), 0.0);
+          float dayMaster = smoothstep(-0.28, 0.10, sunUp);
+          vec3 sky = mix(uHorizon, uZenith, pow(clamp(elev, 0.0, 1.0), 0.55));
+          float horizonBand = pow(1.0 - abs(elev), 3.0);
+          sky = mix(sky, vec3(1.0, 0.52, 0.26), horizonBand * smoothstep(0.30, -0.12, sunUp) * 0.6);
+          float halo = pow(sd, 8.0) * 0.5 + pow(sd, 90.0) * 2.2;
+          float disc = smoothstep(0.9992, 0.9997, sd) * 8.0;
+          vec3 ground = (sky + uSunColor * (halo + disc)) * dayMaster;
+          gl_FragColor = vec4(ground * uGroundAmt, 1.0);
+        }`,
+      side: THREE.BackSide,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.skyMesh = new THREE.Mesh(new THREE.SphereGeometry(6e4, 32, 16), this.skyMat);
+    this.skyMesh.name = 'skyDome';
+    this.skyMesh.renderOrder = -1000;   // drawn first, as the background
+    this.skyMesh.frustumCulled = false;
+    this.scene.add(this.skyMesh);        // at origin = camera; does NOT rebase
+  }
+
   // A thin drifting cloud deck: coverage baked once from seamless 3D noise
   // (sampled per-texel through the sphere direction, so no equirect seam), lit
   // by the sun, with soft-thresholded gaps so continents show through. Sits
   // above most terrain; the tallest peaks poke through. Zero assets.
   _buildClouds() {
+    const CL = this.biome.clouds;
+    if (!CL || CL.opacity <= 0) { this.cloudMesh = null; this.cloudMat = null; this._cloudTex = null; return; }
     const W = 256, H = 128;
     const img = new Uint8Array(W * H * 4);
     const n = this.contNoise;
@@ -683,7 +880,10 @@ export class PlanetSphere {
       uniforms: {
         uTex: { value: tex },
         uSunDir: { value: new THREE.Vector3(1, 0, 0) },
-        uOpacity: { value: 0.6 },
+        uOpacity: { value: CL.opacity },
+        uCovLo: { value: CL.coverageLo },
+        uCovHi: { value: CL.coverageHi },
+        uTint: { value: new THREE.Color(CL.tint) },
       },
       vertexShader: /* glsl */`
         #include <common>
@@ -700,14 +900,15 @@ export class PlanetSphere {
         #include <common>
         #include <logdepthbuf_pars_fragment>
         uniform sampler2D uTex; uniform vec3 uSunDir; uniform float uOpacity;
+        uniform float uCovLo; uniform float uCovHi; uniform vec3 uTint;
         varying vec3 vN; varying vec2 vUv;
         void main() {
           #include <logdepthbuf_fragment>
           float cov = texture2D(uTex, vUv).a;
-          float cloud = smoothstep(0.50, 0.74, cov);
+          float cloud = smoothstep(uCovLo, uCovHi, cov);
           if (cloud < 0.01) discard;
           float lit = clamp(dot(normalize(vN), uSunDir) * 0.6 + 0.55, 0.24, 1.12);
-          gl_FragColor = vec4(vec3(lit), cloud * uOpacity);
+          gl_FragColor = vec4(uTint * lit, cloud * uOpacity);
         }`,
       side: THREE.DoubleSide,
       transparent: true,
@@ -719,11 +920,15 @@ export class PlanetSphere {
     this.root.add(this.cloudMesh);
   }
 
-  /** World-space unit vector pointing toward the sun (lights the atmo limb + clouds). */
+  /** World-space unit vector pointing toward the sun (lights the atmo limb + clouds + sky). */
   setSunDirection(v) {
     this.atmoMat.uniforms.uSunDir.value.copy(v).normalize();
+    this.skyMat.uniforms.uSunDir.value.copy(v).normalize();
     if (this.cloudMat) this.cloudMat.uniforms.uSunDir.value.copy(v).normalize();
   }
+
+  /** 1 at the surface -> 0 in orbit (read by planetstate to fade stars in space). */
+  get groundAmt() { return this.atmoMat.uniforms.uGroundAmt.value; }
 
   /** Universe-space centre of the planet (default origin). */
   setPlanetCenter(v) { this.planetCenter.copy(v); }
@@ -749,10 +954,15 @@ export class PlanetSphere {
     // one shader serves both the ground sky dome and the orbital limb. uUp must
     // be the player radial (NOT cameraPosition, which is pinned at the origin).
     const rLen = this._camLocal.length();
-    if (rLen > 1e-3) this.atmoMat.uniforms.uUp.value.copy(this._camLocal).multiplyScalar(1 / rLen);
     const agl = rLen - this.radius;
     const g = 1 - agl / (this.radius * 0.5);
-    this.atmoMat.uniforms.uGroundAmt.value = g < 0 ? 0 : g > 1 ? 1 : g;
+    const groundAmt = g < 0 ? 0 : g > 1 ? 1 : g;
+    if (rLen > 1e-3) {
+      this.atmoMat.uniforms.uUp.value.copy(this._camLocal).multiplyScalar(1 / rLen);
+      this.skyMat.uniforms.uUp.value.copy(this.atmoMat.uniforms.uUp.value);
+    }
+    this.atmoMat.uniforms.uGroundAmt.value = groundAmt;
+    this.skyMat.uniforms.uGroundAmt.value = groundAmt;   // fades the ground sky to space
 
     // slow cloud drift (the mesh is a child of root, so it rebases correctly).
     if (this.cloudMesh) this.cloudMesh.rotation.y += dt * 0.003;
@@ -774,9 +984,10 @@ export class PlanetSphere {
     this.faces = null;
     this.terrainMat.dispose();
     this._detailTex?.dispose();
-    this.seaMesh.geometry.dispose(); this.seaMat.dispose();
+    if (this.seaMesh) { this.seaMesh.geometry.dispose(); this.seaMat.dispose(); }
     this.atmoMesh.geometry.dispose(); this.atmoMat.dispose();
-    this.cloudMesh.geometry.dispose(); this.cloudMat.dispose(); this._cloudTex.dispose();
+    this.scene.remove(this.skyMesh); this.skyMesh.geometry.dispose(); this.skyMat.dispose();
+    if (this.cloudMesh) { this.cloudMesh.geometry.dispose(); this.cloudMat.dispose(); this._cloudTex.dispose(); }
     this.scene.remove(this.root);
   }
 }

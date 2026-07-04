@@ -36,6 +36,7 @@
     const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 1, 3e5);
 
     const SEED = Number(new URLSearchParams(location.search).get('seed')) || 20260704;
+    const BIOME = new URLSearchParams(location.search).get('biome') || 'lush';
     const RADIUS = 4000;
 
     // --- lighting -------------------------------------------------------------
@@ -49,7 +50,7 @@
     scene.add(new THREE.AmbientLight(0x20303f, 0.35));
 
     // --- starfield backdrop (self-contained) ----------------------------------
-    (function stars() {
+    const starsMat = (function stars() {
       const N = 1800, p = new Float32Array(N * 3);
       let s = 987654321 >>> 0;
       const rnd = () => (((s = (Math.imul(s ^ (s >>> 15), 0x2c1b3c6d)) >>> 0)) / 4294967296);
@@ -60,12 +61,13 @@
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(p, 3));
-      const m = new THREE.PointsMaterial({ color: 0xffffff, size: 260, sizeAttenuation: true });
+      const m = new THREE.PointsMaterial({ color: 0xffffff, size: 260, sizeAttenuation: true, transparent: true, depthWrite: false });
       scene.add(new THREE.Points(g, m));
+      return m;
     })();
 
     // --- the planet -----------------------------------------------------------
-    const planet = new PlanetSphere(scene, { seed: SEED, radius: RADIUS, seaLevel: RADIUS });
+    const planet = new PlanetSphere(scene, { seed: SEED, radius: RADIUS, biome: BIOME });
     planet.setSunDirection(sunDirWorld);
 
     engine.setScene(scene, camera, {
@@ -132,6 +134,7 @@
 
       planet.update(1 / 60, _camPos);                  // rebase + LOD
       planet.setSunDirection(sunDirWorld);
+      starsMat.opacity = 1 - planet.groundAmt;          // fade stars out in daylight
 
       // Aim by blending the VIEW DIRECTION (camera-relative), which keeps the
       // planet in frame at every altitude. Orbit -> look at the planet centre;
