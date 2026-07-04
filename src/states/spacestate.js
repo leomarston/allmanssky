@@ -372,15 +372,14 @@ export class SpaceState {
     audio.sfx('takeoff');
     this.shipCtl.shake(1.2);
     await ctx.fade(1.1, '#e8f4ff');
-    // approach azimuth picks the landing site so different approaches land apart
-    const rel = this.shipCtl.position.clone().sub(p.visual.group.position);
-    const az = Math.atan2(rel.z, rel.x);
     ctx.gameState.location.pos = null;
-    ctx.switchState('surface', {
+    // Land on the SEAMLESS spherical planet: fly from orbit to the round surface
+    // with no cut, walk/mine/scan, and climb back out to return to space.
+    // PlanetState derives the world's seed + biome from this planet's def and
+    // records gs.location so death / save / resume route back here.
+    ctx.switchState('planet', {
       systemId: this.systemId,
       planetIndex: p.index,
-      arrive: 'entry',   // drop into the atmosphere still flying — land with G
-      landingPos: { x: Math.cos(az) * 380, z: Math.sin(az) * 380 },
     });
   }
 

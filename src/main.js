@@ -164,14 +164,17 @@ class Game {
     old?.exit?.();
     const next = name === 'space' ? new SpaceState(this.ctx)
       : name === 'hangar' ? new HangarState(this.ctx)
-        : new SurfaceState(this.ctx);
+        : name === 'planet' ? new PlanetState(this.ctx)
+          : new SurfaceState(this.ctx);
     this.state = next;
     await next.enter(params);
     const bloom = name === 'space'
       ? { bloomStrength: 0.65, bloomRadius: 0.55, bloomThreshold: 0.8 }
       : name === 'hangar'
         ? { bloomStrength: 0.55, bloomRadius: 0.58, bloomThreshold: 0.84 }
-        : { bloomStrength: 0.4, bloomRadius: 0.5, bloomThreshold: 0.85 };
+        : name === 'planet'
+          ? { bloomStrength: 0.6, bloomRadius: 0.6, bloomThreshold: 0.9 }
+          : { bloomStrength: 0.4, bloomRadius: 0.5, bloomThreshold: 0.85 };
     // AO is verified clean in the interior (small depth range); the outdoor and
     // space scenes use logarithmicDepthBuffer over a huge range, which GTAO's
     // depth prepass mishandles (horizon artifacts) — gated off pending a
@@ -198,6 +201,8 @@ class Game {
     // respawn at ship / in space near start of system
     if (gs.location.mode === 'surface') {
       await this.switchState('surface', { systemId: gs.currentSystemId, planetIndex: gs.location.planetIndex, landingPos: gs.location.landingPos });
+    } else if (gs.location.mode === 'planet') {
+      await this.switchState('planet', { systemId: gs.location.systemId ?? gs.currentSystemId, planetIndex: gs.location.planetIndex });
     } else {
       gs.location.pos = null;
       await this.switchState('space', { systemId: gs.currentSystemId });
@@ -274,6 +279,11 @@ class Game {
             planetIndex: loaded.location.planetIndex,
             landingPos: loaded.location.landingPos ?? { x: 0, z: 0 },
             restorePos: true,
+          });
+        } else if (loaded.location.mode === 'planet') {
+          await this.switchState('planet', {
+            systemId: loaded.location.systemId ?? loaded.currentSystemId,
+            planetIndex: loaded.location.planetIndex,
           });
         } else {
           await this.switchState('space', { systemId: loaded.currentSystemId });

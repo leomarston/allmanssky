@@ -64,6 +64,15 @@ const PLANET_SEED_DEFAULT = 20260704;   // parity with test/pages/planet.html
 
 const SUN_DIR = new THREE.Vector3(0.55, 0.42, 0.72).normalize();
 const SHIP_OFFSET = new THREE.Vector3(0, -1.1, -4.0);   // chase view, camera at origin
+const LEAVE_ORBIT_AGL = 2600;       // climb past this (outbound) -> back to space
+
+// Galaxy biome keys (universe/biomes.js) -> seamless PlanetSphere biome keys.
+const GALAXY_BIOME_MAP = {
+  lush: 'lush', ocean: 'ocean', desert: 'desert', frozen: 'frozen',
+  swamp: 'toxic', toxic: 'toxic', volcanic: 'scorched', irradiated: 'barren',
+  barren: 'barren', crystal: 'exotic', exotic: 'exotic',
+};
+function mapGalaxyBiome(k) { return GALAXY_BIOME_MAP[k] ?? 'lush'; }
 
 export class PlanetState {
   constructor(ctx) {
@@ -108,6 +117,7 @@ export class PlanetState {
     this._mineBeam = null;
     this._mineTick = 0;
     this._scanCd = 0;                       // scanner cooldown (s)
+    this._leaving = false;                  // guard: leave-orbit transition fired once
     this._aim = new THREE.Vector3();       // camera aim direction (world)
     this._mineFrom = new THREE.Vector3();  // beam emitter tip
     this._mineTo = new THREE.Vector3();    // beam endpoint (node middle)
@@ -115,12 +125,33 @@ export class PlanetState {
 
   async enter(params = {}) {
     const { ctx } = this;
-    const seed = (params.seed ?? PLANET_SEED_DEFAULT) >>> 0;
+    const gs = ctx.gameState;
 
-    // Biome: an explicit key (?biome=desert / params.biome), else picked
-    // deterministically from the seed. Drives the planet AND the scene lighting.
-    const biome = (typeof params.biome === 'string' && BIOMES[params.biome])
-      ? BIOMES[params.biome] : pickBiome(seed);
+    // World identity — two entry paths:
+    //  • FROM SPACE (real landing): params.planetIndex/systemId identify a galaxy
+    //    planet; derive seed + biome from its def, and record gs.location so
+    //    death / save / resume route back to this exact planet.
+    //  • DEBUG (?state=planet): explicit params.seed / params.biome, no def.
+    this.systemId = params.systemId ?? gs?.currentSystemId ?? null;
+    this.planetIndex = (params.planetIndex != null) ? params.planetIndex : -1;
+    this.def = null;
+    if (this.planetIndex >= 0 && ctx.galaxy && this.systemId) {
+      const sys = ctx.galaxy.getSystem(this.systemId);
+      this.def = sys?.planets?.[this.planetIndex] ?? null;
+    }
+    let seed, biomeKey;
+    if (this.def) {
+      seed = this.def.seed >>> 0;
+      biomeKey = (typeof params.biome === 'string') ? params.biome : mapGalaxyBiome(this.def.biome);
+      if (gs) gs.location = { mode: 'planet', planetIndex: this.planetIndex, systemId: this.systemId, pos: gs.location?.pos ?? null };
+    } else {
+      seed = (params.seed ?? PLANET_SEED_DEFAULT) >>> 0;
+      biomeKey = params.biome;
+    }
+
+    // Biome descriptor drives the planet AND the scene lighting.
+    const biome = (typeof biomeKey === 'string' && BIOMES[biomeKey])
+      ? BIOMES[biomeKey] : pickBiome(seed);
     this.biome = biome;
     const L = biome.light;
 
@@ -181,15 +212,16 @@ export class PlanetState {
     });
 
     // ship visual (camera-relative; stays near origin for precision)
-    const gs = ctx.gameState;
     this.shipObj = buildShip(gs?.ship?.seed ?? seed, gs?.ship?.class ?? 'swift');
     this.scene.add(this.shipObj.group);
 
-    // --- start in orbit, looking down at the round world ----------------------
+    // --- start altitude: a snappy in-atmosphere drop for a real landing from
+    // space; the full orbit descent for the debug ?state=planet showcase. ------
+    const startAGL = (this.planetIndex >= 0) ? 2000 : PLANET_RADIUS * 2.2;
     // A sun-lit, non-polar direction reads best (terminator + colour).
     const startDir = new THREE.Vector3(0.38, 0.26, 0.90).normalize();
     const groundR = this.planet.heightAt(startDir);
-    this.playerUniPos.copy(startDir).multiplyScalar(groundR + PLANET_RADIUS * 2.2);
+    this.playerUniPos.copy(startDir).multiplyScalar(groundR + startAGL);
     // nose toward planet centre, tipped a touch toward the tangent so the curved
     // limb sits in frame; "up" = local radial so the self-leveller has nothing
     // to fight on the very first frame.
@@ -410,8 +442,30 @@ export class PlanetState {
         if (input.actionPressed('interact')) this.disembark();
       } else if (agl < LAND_MAX_AGL) {
         this._interactLabel = 'SLOW DOWN TO DISEMBARK';
+      } else if (this.planetIndex >= 0 && this.agl > LEAVE_ORBIT_AGL * 0.7) {
+        this._interactLabel = 'CLIMB TO LEAVE ORBIT';
       }
     }
+
+    // leave orbit: only when this planet was entered FROM SPACE (planetIndex>=0;
+    // the debug ?state=planet mode stays isolated). Climb outbound past the
+    // atmosphere and we hand back to SpaceState above this planet.
+    if (this.planetIndex >= 0 && !this._leaving
+      && this.agl > LEAVE_ORBIT_AGL && this.shipVel.dot(this._dir) > 0) {
+      this._leaving = true;
+      this._leaveToSpace();
+    }
+  }
+
+  /** Climbed out of the atmosphere from a real landing -> back to SpaceState,
+   *  placed above the planet we just left (SpaceState honours mode:'takeoff'). */
+  async _leaveToSpace() {
+    const { ctx } = this;
+    const gs = ctx.gameState;
+    audio.sfx('takeoff');
+    await ctx.fade(1.0, '#04121c');
+    if (gs) { gs.location.pos = null; gs.location.mode = 'space'; }
+    ctx.switchState('space', { systemId: this.systemId, mode: 'takeoff', planetIndex: this.planetIndex });
   }
 
   _syncShipCamera() {
